@@ -91,7 +91,8 @@ day.
 Choice: a file per target per UTC day, `data/<target path>/<YYYY-MM-DD>.pws`, appended one record
 per step. A record is a length, a CRC32 and the step: start time, step length, pings sent,
 duplicates, reordered, and one `u32` microseconds RTT per ping with `u32::MAX` for a loss. 20
-pings every 60 s is about 130 KB a day per target, 50 MB per target for 400 days. A torn last
+pings every 60 s is 106 bytes a step and about 150 KB a day per target (measured in the demo),
+60 MB per target for 400 days. A torn last
 record (power cut) fails its CRC and is cut off when the file is next opened for writing, so the
 store is crash safe without a WAL. Retention is deleting old day files. Copying, backing up and
 inspecting are file operations.
