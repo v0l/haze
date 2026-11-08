@@ -35,10 +35,27 @@ async fn udp_echo(bind: IpAddr, delay: Duration, copies: usize) -> SocketAddr {
     address
 }
 
+fn exact_delay_udp_echo(delay: Duration) -> SocketAddr {
+    let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    let address = socket.local_addr().unwrap();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 2048];
+        loop {
+            let (n, from) = socket.recv_from(&mut buf).unwrap();
+            let due = std::time::Instant::now() + delay;
+            while std::time::Instant::now() < due {
+                std::hint::spin_loop();
+            }
+            socket.send_to(&buf[..n], from).unwrap();
+        }
+    });
+    address
+}
+
 #[tokio::test]
 async fn udp_echo_measures_an_added_delay() {
     let delay = Duration::from_millis(25);
-    let server = udp_echo(Ipv4Addr::LOCALHOST.into(), delay, 1).await;
+    let server = exact_delay_udp_echo(delay);
     let probe = Arc::new(UdpEcho::new(server, 64, &NO_OPTIONS).await.unwrap());
     let sampler = Sampler::new(probe);
     let (step, detail) = sampler
@@ -52,7 +69,7 @@ async fn udp_echo_measures_an_added_delay() {
     let max = summary.max.unwrap();
     assert!(min >= delay, "min {min:?} below the server delay");
     assert!(
-        median < delay + Duration::from_millis(3),
+        median < delay + Duration::from_millis(2),
         "median {median:?} too far over {delay:?}"
     );
     assert!(
