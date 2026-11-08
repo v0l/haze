@@ -280,6 +280,50 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 
 [[package]]
+name = "haze"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "haze-core",
+ "haze-probe",
+ "haze-store",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "haze-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "toml",
+]
+
+[[package]]
+name = "haze-probe"
+version = "0.1.0"
+dependencies = [
+ "haze-core",
+ "libc",
+ "rustls",
+ "socket2",
+ "tokio",
+ "tokio-rustls",
+ "webpki-roots",
+ "x509-parser",
+]
+
+[[package]]
+name = "haze-store"
+version = "0.1.0"
+dependencies = [
+ "crc32fast",
+ "haze-core",
+ "tempfile",
+]
+
+[[package]]
 name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -412,50 +456,6 @@ name = "pin-project-lite"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
-
-[[package]]
-name = "pingwatch"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "pingwatch-core",
- "pingwatch-probe",
- "pingwatch-store",
- "tempfile",
- "tokio",
-]
-
-[[package]]
-name = "pingwatch-core"
-version = "0.1.0"
-dependencies = [
- "serde",
- "toml",
-]
-
-[[package]]
-name = "pingwatch-probe"
-version = "0.1.0"
-dependencies = [
- "libc",
- "pingwatch-core",
- "rustls",
- "socket2",
- "tokio",
- "tokio-rustls",
- "webpki-roots",
- "x509-parser",
-]
-
-[[package]]
-name = "pingwatch-store"
-version = "0.1.0"
-dependencies = [
- "crc32fast",
- "pingwatch-core",
- "tempfile",
-]
 
 [[package]]
 name = "powerfmt"

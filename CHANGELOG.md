@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to pingwatch are listed here. The format follows
+All notable changes to haze are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow
 [Semantic Versioning](https://semver.org/).
 
@@ -17,4 +17,4 @@ All notable changes to pingwatch are listed here. The format follows
 - Alert rules like `median > 20ms 3 of 5`, `loss >= 10% for 3 steps`, `smoke > 2x baseline` and
   SmokePing patterns, with clear delays, flap detection and dependencies.
 - A TOML config with groups that pass settings, tags and alerts to their targets.
-- `pingwatch ping`, `check`, `run` and `show`.
+- `haze ping`, `check`, `run` and `show`.

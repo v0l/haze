@@ -3,10 +3,10 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
-use pingwatch_core::duration::format_ms;
-use pingwatch_core::{AlertEvent, AlertState, Config, Step, Summary, smoke_line};
-use pingwatch_probe::{Sampler, StepDetail, build};
-use pingwatch_store::Store;
+use haze_core::duration::format_ms;
+use haze_core::{AlertEvent, AlertState, Config, Step, Summary, smoke_line};
+use haze_probe::{Sampler, StepDetail, build};
+use haze_store::Store;
 use tokio::sync::mpsc;
 use tokio::time::{Instant, MissedTickBehavior};
 
@@ -68,7 +68,7 @@ impl Evaluator {
         }
         let series: Vec<Summary> = history.iter().cloned().collect();
         let config = &self.config.targets[target];
-        let held = pingwatch_core::matcher::held_by_dependency(
+        let held = haze_core::matcher::held_by_dependency(
             config.depends.iter().map(String::as_str),
             |p| self.is_down(p),
         );

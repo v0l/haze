@@ -4,7 +4,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
-use pingwatch_core::ProbeError;
+use haze_core::ProbeError;
 use tokio::sync::oneshot;
 
 #[derive(Clone, Copy, Debug)]

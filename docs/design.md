@@ -5,23 +5,23 @@ the rest is the plan.
 
 ## Layout
 
-A Cargo workspace like cycler: small crates, a CLI binary, a UI crate later.
+A Cargo workspace like cycler: small crates and one binary that is both the CLI and the web
+dashboard. There is no desktop app; the dashboard is the only UI.
 
 | Crate | Holds |
 | --- | --- |
-| `pingwatch-core` | Probe trait, samples and step summaries, the log histogram, matchers and alert state, config types and inheritance. No async runtime, no I/O. |
-| `pingwatch-probe` | ICMP echo, UDP echo, TCP connect, HTTP/HTTPS timing on tokio. |
-| `pingwatch-store` | The day file store and its query API. |
-| `pingwatch` | The CLI: `ping`, `check`, `run`, `show`. Later `serve` and `agent`. |
-| `pingwatch-web` (later) | axum routes, the SVG graph renderer, the static client. |
-| `pingwatch-ui` (later) | The egui_bench desktop viewer. |
+| `haze-core` | Probe trait, samples and step summaries, the log histogram, matchers and alert state, config types and inheritance. No async runtime, no I/O. |
+| `haze-probe` | ICMP echo, UDP echo, TCP connect, HTTP/HTTPS timing on tokio. |
+| `haze-store` | The day file store and its query API. |
+| `haze` | The binary: `ping`, `check`, `run` (which also serves the dashboard), `show`. Later `agent`. |
+| `haze-web` | axum routes, the JSON API, the SVG graph renderer and the embedded client. |
 
 ## 1. Probes
 
 Options: fork external tools like SmokePing (fping, curl), use one crate per protocol
 (`surge-ping`, `reqwest`), or write the probes on `socket2` and tokio.
 
-Choice: our own probes on `socket2` and tokio, behind one trait in `pingwatch-core`:
+Choice: our own probes on `socket2` and tokio, behind one trait in `haze-core`:
 
 ```rust
 pub trait Probe: Send + Sync {
@@ -88,7 +88,7 @@ Options: RRD files (fixed resolution, averaged percentiles), Prometheus or Victo
 DuckDB (heavy C++ build, bad on musl and cross targets), or a purpose built file per target per
 day.
 
-Choice: a file per target per UTC day, `data/<target path>/<YYYY-MM-DD>.pws`, appended one record
+Choice: a file per target per UTC day, `data/<target path>/<YYYY-MM-DD>.haze`, appended one record
 per step. A record is a length, a CRC32 and the step: start time, step length, pings sent,
 duplicates, reordered, and one `u32` microseconds RTT per ping with `u32::MAX` for a loss. 20
 pings every 60 s is 106 bytes a step and about 150 KB a day per target (measured in the demo),
@@ -128,9 +128,6 @@ Navigation is tags as well as the tree: a target path (`dns/cloudflare`) and any
 overlaid, compare (any targets overlaid), loss heatmap (targets by time), incident timeline. A
 share link fixes the range in the URL. Dark mode from `prefers-color-scheme`, a mobile layout.
 
-The desktop viewer is an egui_bench app (`pingwatch-ui`) that talks to the same API, or opens a
-data directory read only to run standalone. It comes after the web UI.
-
 ## 5. Alerts
 
 Choice: a small expression language in config, evaluated after every step per target.
@@ -156,14 +153,14 @@ past `flap_limit` the alert is marked flapping and notifications stop until it s
 Dependencies: a target's `depends` names another target; while that one has an active alert the
 child's alerts are held. Maintenance windows silence by tag or path for a time range.
 
-Routes (next): Nostr DM (NIP-17) from a pingwatch key, webhook (JSON), SMTP, ntfy, Telegram.
+Routes (next): Nostr DM (NIP-17) from a haze key, webhook (JSON), SMTP, ntfy, Telegram.
 Each route has a filter by tag and severity. History of raises and clears goes in the redb file.
 
 ## 6. Distributed
 
 Options: SmokePing style HTTP with a shared secret, mTLS, Noise, or signed requests over HTTPS.
 
-Choice: `pingwatch agent` is the same binary in agent mode. It has a secp256k1 key (a Nostr key,
+Choice: `haze agent` is the same binary in agent mode. It has a secp256k1 key (a Nostr key,
 so the user's tooling and NIP-98 style HTTP auth apply) and the server allowlists agent public
 keys. The agent fetches its assignment (the targets tagged for it) and pushes batches of step
 records as signed HTTPS requests. It writes every step to its own local store first and keeps a
@@ -204,18 +201,18 @@ probe = "http"
 url = "https://example.com/"
 ```
 
-`pingwatch check config.toml` resolves the tree, parses every alert and prints the targets
+`haze check config.toml` resolves the tree, parses every alert and prints the targets
 (skeleton). Live reload on file change and SIGHUP, keeping each unchanged target's schedule and
 state. An HTTP API adds and removes runtime targets, kept in redb and shown apart from file ones.
-`pingwatch import smokeping Targets` converts a SmokePing Targets file (its `+`, `++` tree maps to
+`haze import smokeping Targets` converts a SmokePing Targets file (its `+`, `++` tree maps to
 nested tables; `smokeping-config` only writes Targets files, so this is our own small parser),
-and `pingwatch import hosts` makes one target per line of a hosts list.
+and `haze import hosts` makes one target per line of a hosts list.
 
 ## 8. Packaging
 
 Choice: follow agentbench's release workflow. A `v*` tag builds release archives for
 x86_64 and aarch64 Linux (musl, static), aarch64 macOS and x86_64 Windows, plus `.deb` and `.rpm`
 (`cargo-deb`, `cargo-generate-rpm`), a scratch Docker image pushed on tag, a systemd unit with
-`DynamicUser=yes` and `StateDirectory=pingwatch`, and checksums with signed artifacts. The
+`DynamicUser=yes` and `StateDirectory=haze`, and checksums with signed artifacts. The
 CHANGELOG follows Keep a Changelog as in cycler. Nothing is published until the user picks the
 name and the GitHub org.

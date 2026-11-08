@@ -11,8 +11,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use pingwatch_core::sample::count_reordered;
-use pingwatch_core::{Probe, ProbeKind, Reply, Step, Target};
+use haze_core::sample::count_reordered;
+use haze_core::{Probe, ProbeKind, Reply, Step, Target};
 use tokio::task::JoinSet;
 
 pub use net::SocketOptions;

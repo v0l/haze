@@ -6,14 +6,14 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
-use pingwatch_core::config::MIN_STEP;
-use pingwatch_core::duration::{format_ms, parse_duration};
-use pingwatch_core::{Config, ProbeKind, Target, smoke_line};
-use pingwatch_probe::{Sampler, build};
+use haze_core::config::MIN_STEP;
+use haze_core::duration::{format_ms, parse_duration};
+use haze_core::{Config, ProbeKind, Target, smoke_line};
+use haze_probe::{Sampler, build};
 
 #[derive(Parser)]
 #[command(
-    name = "pingwatch",
+    name = "haze",
     version,
     about = "Latency and loss monitoring with smoke graphs"
 )]
@@ -49,10 +49,16 @@ enum Command {
         tos: Option<u8>,
     },
     #[command(about = "Check a config file and list its targets")]
-    Check { config: PathBuf },
+    Check {
+        #[arg(env = "HAZE_CONFIG", default_value = "haze.toml")]
+        config: PathBuf,
+    },
     #[command(about = "Probe every target in a config, store the steps and evaluate alerts")]
     Run {
+        #[arg(env = "HAZE_CONFIG", default_value = "haze.toml")]
         config: PathBuf,
+        #[arg(long, env = "HAZE_DATA")]
+        data: Option<PathBuf>,
         #[arg(long = "for", value_parser = parse_duration)]
         duration: Option<Duration>,
         #[arg(short, long)]
@@ -60,6 +66,7 @@ enum Command {
     },
     #[command(about = "Summarise stored steps per target")]
     Show {
+        #[arg(env = "HAZE_DATA", default_value = "data")]
         dir: PathBuf,
         #[arg(long, default_value = "1h", value_parser = parse_duration)]
         last: Duration,
@@ -84,8 +91,8 @@ fn main() -> Result<()> {
             source,
             tos,
         } => {
-            if count == 0 || count > pingwatch_core::config::MAX_PINGS {
-                bail!("count must be 1 to {}", pingwatch_core::config::MAX_PINGS);
+            if count == 0 || count > haze_core::config::MAX_PINGS {
+                bail!("count must be 1 to {}", haze_core::config::MAX_PINGS);
             }
             let kind = match probe.as_str() {
                 "tcp" => ProbeKind::Tcp,
@@ -129,10 +136,14 @@ fn main() -> Result<()> {
         }
         Command::Run {
             config,
+            data,
             duration,
             quiet,
         } => {
-            let config = load(&config)?;
+            let mut config = load(&config)?;
+            if let Some(data) = data {
+                config.storage_dir = data.display().to_string();
+            }
             runtime.block_on(run::run(config, duration, quiet))
         }
         Command::Show { dir, last, target } => show(&dir, last, target.as_deref()),
@@ -231,7 +242,7 @@ async fn ping(target: Target, span: Duration) -> Result<()> {
 }
 
 fn show(dir: &PathBuf, last: Duration, only: Option<&str>) -> Result<()> {
-    let store = pingwatch_store::Store::open(dir)?;
+    let store = haze_store::Store::open(dir)?;
     let now = run::now_ms();
     let from = now - last.as_millis() as i64;
     for target in store.targets()? {

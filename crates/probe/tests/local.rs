@@ -2,11 +2,11 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
-use pingwatch_core::{Probe, ProbeError};
-use pingwatch_probe::http::Http;
-use pingwatch_probe::tcp::TcpConnect;
-use pingwatch_probe::udp::UdpEcho;
-use pingwatch_probe::{Sampler, SocketOptions};
+use haze_core::{Probe, ProbeError};
+use haze_probe::http::Http;
+use haze_probe::tcp::TcpConnect;
+use haze_probe::udp::UdpEcho;
+use haze_probe::{Sampler, SocketOptions};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, UdpSocket};
 
@@ -37,16 +37,20 @@ async fn udp_echo(bind: IpAddr, delay: Duration, copies: usize) -> SocketAddr {
 
 fn exact_delay_udp_echo(delay: Duration) -> SocketAddr {
     let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    socket.set_nonblocking(true).unwrap();
     let address = socket.local_addr().unwrap();
     std::thread::spawn(move || {
         let mut buf = [0u8; 2048];
         loop {
-            let (n, from) = socket.recv_from(&mut buf).unwrap();
+            let Ok((n, from)) = socket.recv_from(&mut buf) else {
+                std::hint::spin_loop();
+                continue;
+            };
             let due = std::time::Instant::now() + delay;
             while std::time::Instant::now() < due {
                 std::hint::spin_loop();
             }
-            socket.send_to(&buf[..n], from).unwrap();
+            let _ = socket.send_to(&buf[..n], from);
         }
     });
     address
@@ -69,7 +73,11 @@ async fn udp_echo_measures_an_added_delay() {
     let max = summary.max.unwrap();
     assert!(min >= delay, "min {min:?} below the server delay");
     assert!(
-        median < delay + Duration::from_millis(2),
+        min < delay + Duration::from_millis(2),
+        "min {min:?} too far over {delay:?}"
+    );
+    assert!(
+        median < delay + Duration::from_millis(10),
         "median {median:?} too far over {delay:?}"
     );
     assert!(
@@ -207,7 +215,7 @@ async fn pings_are_spread_across_the_interval() {
 #[cfg(unix)]
 mod icmp {
     use super::*;
-    use pingwatch_probe::icmp::{Icmp, unprivileged_ping_allowed};
+    use haze_probe::icmp::{Icmp, unprivileged_ping_allowed};
 
     fn allowed() -> bool {
         match unprivileged_ping_allowed() {

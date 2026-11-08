@@ -2,8 +2,8 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::time::Duration;
 
-use pingwatch_core::{Histogram, Step};
-use pingwatch_store::{Store, date_name, day_of};
+use haze_core::{Histogram, Step};
+use haze_store::{Store, date_name, day_of};
 
 const DAY: i64 = 86_400_000;
 const T0: i64 = 1_790_000_000_000;
@@ -70,7 +70,7 @@ fn a_torn_last_record_is_dropped_and_overwritten() {
     let file = dir
         .path()
         .join("a")
-        .join(format!("{}.pws", date_name(day_of(T0))));
+        .join(format!("{}.haze", date_name(day_of(T0))));
     let full = std::fs::metadata(&file).unwrap().len();
     let f = OpenOptions::new().write(true).open(&file).unwrap();
     f.set_len(full - 7).unwrap();

@@ -354,7 +354,7 @@ pings = 20
 timeout = "2s"
 
 [storage]
-dir = "/var/lib/pingwatch"
+dir = "/var/lib/haze"
 
 [alerts.loss]
 when = "loss >= 10% for 3 steps"
@@ -438,7 +438,7 @@ port = 22
         assert_eq!(web.timeout, Duration::from_secs(5));
         assert_eq!(config.target("web/ssh").unwrap().port, Some(22));
 
-        assert_eq!(config.storage_dir, "/var/lib/pingwatch");
+        assert_eq!(config.storage_dir, "/var/lib/haze");
         assert_eq!(config.retention_days, 400);
         assert_eq!(config.alerts["loss"].policy.clear_after, 2);
         assert!(matches!(

@@ -137,6 +137,5 @@ socket; `IcmpSendEcho2` (as `winping` uses) works without admin rights.
 | `plume` | taken (editor spawner) | crowded |
 | `smokewatch`, `fume`, `wisps`, `smokeline` | free | |
 
-`haze` is short, free on crates.io and under `v0l`, and reads as what the graph shows. The
-proposal is `haze` under `github.com/v0l/haze`, crates `haze-core`, `haze-probe`, `haze-store`
-and the binary `haze`. Renaming is mechanical; it waits for the user's yes.
+`haze` is short, free on crates.io and under `v0l`, and reads as what the graph shows. The user
+picked it: crates `haze-core`, `haze-probe`, `haze-store`, `haze-web` and the binary `haze`.

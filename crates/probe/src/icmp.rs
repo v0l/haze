@@ -3,7 +3,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
-use pingwatch_core::{Probe, ProbeError, ProbeFuture, Reply};
+use haze_core::{Probe, ProbeError, ProbeFuture, Reply};
 use socket2::{Protocol, SockAddr, Socket};
 use tokio::io::unix::AsyncFd;
 use tokio::task::JoinHandle;

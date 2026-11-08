@@ -4,12 +4,12 @@ use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use pingwatch_core::{Histogram, Step};
+use haze_core::{Histogram, Step};
 
 const DAY_MS: i64 = 86_400_000;
 const LOST: u32 = u32::MAX;
 const FIXED: usize = 8 + 4 + 2 + 2 + 2;
-const EXTENSION: &str = "pws";
+const EXTENSION: &str = "haze";
 
 pub struct Store {
     root: PathBuf,

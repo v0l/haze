@@ -1,13 +1,14 @@
 [Unit]
-Description=pingwatch latency and loss monitor
+Description=haze latency and loss monitor
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart=/usr/bin/pingwatch run /etc/pingwatch/config.toml
+ExecStart=/usr/bin/haze run /etc/haze/config.toml
 DynamicUser=yes
-StateDirectory=pingwatch
-WorkingDirectory=/var/lib/pingwatch
+StateDirectory=haze
+WorkingDirectory=/var/lib/haze
+Environment=HAZE_DATA=/var/lib/haze
 Restart=on-failure
 RestartSec=5
 ProtectSystem=strict

@@ -1,11 +1,11 @@
 [package]
-name = "pingwatch-probe"
+name = "haze-probe"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-pingwatch-core.workspace = true
+haze-core.workspace = true
 libc.workspace = true
 rustls.workspace = true
 socket2.workspace = true

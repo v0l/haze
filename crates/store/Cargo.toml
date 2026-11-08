@@ -1,11 +1,11 @@
 [package]
-name = "pingwatch-store"
+name = "haze-store"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-pingwatch-core.workspace = true
+haze-core.workspace = true
 crc32fast.workspace = true
 
 [dev-dependencies]

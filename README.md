@@ -1,10 +1,8 @@
-# pingwatch
+# haze
 
 Latency and loss monitoring with smoke graphs, in the spirit of SmokePing. Every step sends a
 number of probes spread across the interval, keeps every round trip time, and stores the whole
 distribution so a graph of last year shows the same smoke as a graph of the last hour.
-
-`pingwatch` is a working name. See `docs/research.md` for the name check.
 
 ## Status
 
@@ -15,12 +13,12 @@ and no notifications yet; `docs/design.md` has the plan.
 ## Use
 
 ```
-pingwatch ping 1.1.1.1 -c 20
-pingwatch ping https://example.com/ --probe http -c 5
-pingwatch ping example.com --probe tcp -p 443
-pingwatch check examples/demo.toml
-pingwatch run examples/demo.toml
-pingwatch show demo-data --last 1h
+haze ping 1.1.1.1 -c 20
+haze ping https://example.com/ --probe http -c 5
+haze ping example.com --probe tcp -p 443
+haze check examples/demo.toml
+haze run examples/demo.toml
+haze show demo-data --last 1h
 ```
 
 `ping` prints one smoke line: the shaded cells show where the replies fell on a 0 to scale ms
@@ -46,7 +44,7 @@ pings = 20
 timeout = "2s"
 
 [storage]
-dir = "/var/lib/pingwatch"
+dir = "/var/lib/haze"
 
 [alerts.loss]
 when = "loss >= 10% for 3 steps"

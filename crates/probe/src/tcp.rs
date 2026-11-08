@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
-use pingwatch_core::{Probe, ProbeError, ProbeFuture, Reply};
+use haze_core::{Probe, ProbeError, ProbeFuture, Reply};
 use tokio::net::{TcpSocket, TcpStream};
 
 use crate::net::SocketOptions;

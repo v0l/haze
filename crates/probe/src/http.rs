@@ -2,7 +2,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use pingwatch_core::{Probe, ProbeError, ProbeFuture, Reply};
+use haze_core::{Probe, ProbeError, ProbeFuture, Reply};
 use rustls::pki_types::ServerName;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio_rustls::TlsConnector;
@@ -155,7 +155,7 @@ impl Http {
             self.url.host.clone()
         };
         let request = format!(
-            "GET {} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: pingwatch/{}\r\nAccept: */*\r\nConnection: close\r\n\r\n",
+            "GET {} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: haze/{}\r\nAccept: */*\r\nConnection: close\r\n\r\n",
             self.url.path,
             env!("CARGO_PKG_VERSION"),
         );
