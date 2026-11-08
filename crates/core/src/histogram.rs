@@ -119,6 +119,54 @@ fn from_us(us: f64) -> Duration {
     Duration::from_nanos((us * 1e3).round().max(0.0) as u64)
 }
 
+impl Histogram {
+    pub fn encode(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.count.to_le_bytes());
+        out.extend_from_slice(&self.sum_us.to_le_bytes());
+        out.extend_from_slice(&self.min_us.to_le_bytes());
+        out.extend_from_slice(&self.max_us.to_le_bytes());
+        out.extend_from_slice(&(self.buckets.len() as u32).to_le_bytes());
+        for (index, count) in &self.buckets {
+            out.extend_from_slice(&index.to_le_bytes());
+            out.extend_from_slice(&count.to_le_bytes());
+        }
+    }
+
+    pub fn decode(bytes: &[u8]) -> Option<(Histogram, usize)> {
+        let take = |at: usize, n: usize| bytes.get(at..at + n);
+        let u64_at = |at| take(at, 8).map(|b| u64::from_le_bytes(b.try_into().unwrap()));
+        let f64_at = |at| take(at, 8).map(|b| f64::from_le_bytes(b.try_into().unwrap()));
+        let count = u64_at(0)?;
+        let sum_us = f64_at(8)?;
+        let min_us = f64_at(16)?;
+        let max_us = f64_at(24)?;
+        let entries = u32::from_le_bytes(take(32, 4)?.try_into().unwrap()) as usize;
+        let mut at = 36;
+        let mut buckets = BTreeMap::new();
+        let mut total = 0u64;
+        for _ in 0..entries {
+            let index = i32::from_le_bytes(take(at, 4)?.try_into().unwrap());
+            let n = u64_at(at + 4)?;
+            buckets.insert(index, n);
+            total = total.checked_add(n)?;
+            at += 12;
+        }
+        if total != count {
+            return None;
+        }
+        Some((
+            Histogram {
+                buckets,
+                count,
+                sum_us,
+                min_us,
+                max_us,
+            },
+            at,
+        ))
+    }
+}
+
 pub fn exact_quantile(sorted: &[Duration], q: f64) -> Option<Duration> {
     if sorted.is_empty() {
         return None;
@@ -206,6 +254,23 @@ mod tests {
                 "q {q}: {estimate:?} vs {exact:?}"
             );
         }
+    }
+
+    #[test]
+    fn encoding_round_trips() {
+        let mut rng = Lcg(3);
+        let mut histogram = Histogram::new();
+        (0..500).for_each(|_| histogram.record(rng.rtt()));
+        let mut bytes = Vec::new();
+        histogram.encode(&mut bytes);
+        bytes.extend_from_slice(b"tail");
+        let (decoded, used) = Histogram::decode(&bytes).unwrap();
+        assert_eq!(decoded, histogram);
+        assert_eq!(&bytes[used..], b"tail");
+        assert!(Histogram::decode(&bytes[..used - 1]).is_none());
+        let mut empty = Vec::new();
+        Histogram::new().encode(&mut empty);
+        assert_eq!(Histogram::decode(&empty).unwrap().0, Histogram::new());
     }
 
     #[test]

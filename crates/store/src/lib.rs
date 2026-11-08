@@ -7,6 +7,8 @@ use std::time::Duration;
 use haze_core::{Histogram, Step};
 
 const DAY_MS: i64 = 86_400_000;
+const HOUR_MS: i64 = 3_600_000;
+const ROLLUP_EXTENSION: &str = "hzr";
 const LOST: u32 = u32::MAX;
 const FIXED: usize = 8 + 4 + 2 + 2 + 2;
 const EXTENSION: &str = "haze";
@@ -33,6 +35,96 @@ impl Bucket {
         } else {
             1.0 - self.received as f64 / self.sent as f64
         }
+    }
+}
+
+impl Bucket {
+    pub fn absorb(&mut self, other: &Bucket) {
+        self.steps += other.steps;
+        self.sent += other.sent;
+        self.received += other.received;
+        self.duplicates += other.duplicates;
+        self.histogram.merge(&other.histogram);
+    }
+
+    fn encode(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.start_ms.to_le_bytes());
+        out.extend_from_slice(&self.steps.to_le_bytes());
+        out.extend_from_slice(&self.sent.to_le_bytes());
+        out.extend_from_slice(&self.received.to_le_bytes());
+        out.extend_from_slice(&self.duplicates.to_le_bytes());
+        self.histogram.encode(out);
+    }
+
+    fn decode(bytes: &[u8]) -> Option<(Bucket, usize)> {
+        let head = bytes.get(..36)?;
+        let u64_at = |at: usize| u64::from_le_bytes(head[at..at + 8].try_into().unwrap());
+        let (histogram, used) = Histogram::decode(&bytes[36..])?;
+        Some((
+            Bucket {
+                start_ms: u64_at(0) as i64,
+                steps: u32::from_le_bytes(head[8..12].try_into().unwrap()),
+                sent: u64_at(12),
+                received: u64_at(20),
+                duplicates: u64_at(28),
+                histogram,
+            },
+            36 + used,
+        ))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Rollup {
+    pub day: Bucket,
+    pub hours: Vec<Bucket>,
+}
+
+impl Rollup {
+    fn encode(&self) -> Vec<u8> {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&(self.hours.len() as u32).to_le_bytes());
+        self.day.encode(&mut payload);
+        self.hours.iter().for_each(|h| h.encode(&mut payload));
+        let mut out = crc32fast::hash(&payload).to_le_bytes().to_vec();
+        out.extend_from_slice(&payload);
+        out
+    }
+
+    fn decode(bytes: &[u8]) -> Option<Rollup> {
+        let crc = u32::from_le_bytes(bytes.get(..4)?.try_into().unwrap());
+        let payload = &bytes[4..];
+        if crc32fast::hash(payload) != crc {
+            return None;
+        }
+        let hours = u32::from_le_bytes(payload.get(..4)?.try_into().unwrap()) as usize;
+        let mut at = 4;
+        let (day, used) = Bucket::decode(&payload[at..])?;
+        at += used;
+        let mut list = Vec::with_capacity(hours.min(24));
+        for _ in 0..hours {
+            let (hour, used) = Bucket::decode(&payload[at..])?;
+            at += used;
+            list.push(hour);
+        }
+        Some(Rollup { day, hours: list })
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Tier {
+    Hour,
+    Day,
+}
+
+fn bucket_of_step(step: &Step) -> Bucket {
+    Bucket {
+        start_ms: step.start_ms,
+        steps: 1,
+        sent: step.sent() as u64,
+        received: step.received() as u64,
+        duplicates: step.duplicates as u64,
+        histogram: step.histogram(),
     }
 }
 
@@ -174,6 +266,10 @@ impl Store {
             self.open.retain(|(t, _), _| t != target);
             let path = self.day_file(target, day);
             fs::create_dir_all(path.parent().unwrap())?;
+            match fs::remove_file(self.rollup_file(target, day)) {
+                Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
+                _ => {}
+            }
             let mut file = OpenOptions::new()
                 .create(true)
                 .read(true)
@@ -262,23 +358,126 @@ impl Store {
         width_ms: i64,
     ) -> io::Result<Vec<Bucket>> {
         let width = width_ms.max(1);
+        let aligned = |unit: i64| width % unit == 0 && from_ms.rem_euclid(unit) == 0;
+        let tier = if aligned(DAY_MS) {
+            Some(Tier::Day)
+        } else if aligned(HOUR_MS) {
+            Some(Tier::Hour)
+        } else {
+            None
+        };
+        let mut parts: Vec<Bucket> = Vec::new();
+        for day in self.days(target)? {
+            let (day_start, day_end) = (day * DAY_MS, (day + 1) * DAY_MS);
+            if day_end <= from_ms || day_start >= to_ms {
+                continue;
+            }
+            let whole_day = day_start >= from_ms && day_end <= to_ms;
+            let rollup = match tier {
+                Some(_) => self.read_rollup(target, day)?,
+                None => None,
+            };
+            let use_day = whole_day && matches!(tier, Some(Tier::Day));
+            let hour_inside = |hour: i64| hour >= from_ms && hour + HOUR_MS <= to_ms;
+            let covered = |ms: i64| {
+                rollup.is_some() && (use_day || hour_inside(ms.div_euclid(HOUR_MS) * HOUR_MS))
+            };
+            match &rollup {
+                Some(r) if use_day => parts.push(r.day.clone()),
+                Some(r) => {
+                    parts.extend(r.hours.iter().filter(|h| hour_inside(h.start_ms)).cloned())
+                }
+                None => {}
+            }
+            let needs_raw = rollup.is_none() || from_ms > day_start || to_ms < day_end;
+            if needs_raw {
+                let bytes = fs::read(self.day_file(target, day))?;
+                let (records, _) = read_records(&bytes);
+                parts.extend(
+                    records
+                        .iter()
+                        .filter(|s| {
+                            s.start_ms >= from_ms && s.start_ms < to_ms && !covered(s.start_ms)
+                        })
+                        .map(bucket_of_step),
+                );
+            }
+        }
+        parts.sort_by_key(|p| p.start_ms);
         let mut buckets: Vec<Bucket> = Vec::new();
-        for step in self.steps(target, from_ms, to_ms)? {
-            let start = from_ms + (step.start_ms - from_ms).div_euclid(width) * width;
+        for part in parts {
+            let start = from_ms + (part.start_ms - from_ms).div_euclid(width) * width;
             if buckets.last().is_none_or(|b| b.start_ms != start) {
                 buckets.push(Bucket {
                     start_ms: start,
                     ..Bucket::default()
                 });
             }
-            let bucket = buckets.last_mut().unwrap();
-            bucket.steps += 1;
-            bucket.sent += step.sent() as u64;
-            bucket.received += step.received() as u64;
-            bucket.duplicates += step.duplicates as u64;
-            bucket.histogram.merge(&step.histogram());
+            buckets.last_mut().unwrap().absorb(&part);
         }
         Ok(buckets)
+    }
+
+    fn rollup_file(&self, target: &str, day: i64) -> PathBuf {
+        self.root
+            .join(target)
+            .join(format!("{}.{ROLLUP_EXTENSION}", date_name(day)))
+    }
+
+    pub fn read_rollup(&self, target: &str, day: i64) -> io::Result<Option<Rollup>> {
+        check_path(target)?;
+        match fs::read(self.rollup_file(target, day)) {
+            Ok(bytes) => Ok(Rollup::decode(&bytes)),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn rollup(&mut self, target: &str, day: i64) -> io::Result<Rollup> {
+        check_path(target)?;
+        self.open.remove(&(target.to_string(), day));
+        let bytes = fs::read(self.day_file(target, day))?;
+        let (steps, _) = read_records(&bytes);
+        let mut rollup = Rollup {
+            day: Bucket {
+                start_ms: day * DAY_MS,
+                ..Bucket::default()
+            },
+            hours: Vec::new(),
+        };
+        for step in &steps {
+            let part = bucket_of_step(step);
+            let hour = step.start_ms.div_euclid(HOUR_MS) * HOUR_MS;
+            if rollup.hours.last().is_none_or(|h| h.start_ms != hour) {
+                rollup.hours.push(Bucket {
+                    start_ms: hour,
+                    ..Bucket::default()
+                });
+            }
+            rollup.hours.last_mut().unwrap().absorb(&part);
+            rollup.day.absorb(&part);
+        }
+        let path = self.rollup_file(target, day);
+        let partial = path.with_extension("partial");
+        let mut file = File::create(&partial)?;
+        file.write_all(&rollup.encode())?;
+        file.sync_data()?;
+        fs::rename(&partial, &path)?;
+        Ok(rollup)
+    }
+
+    pub fn rollup_closed_days(&mut self, now_ms: i64) -> io::Result<usize> {
+        let today = day_of(now_ms);
+        let mut written = 0;
+        for target in self.targets()? {
+            for day in self.days(&target)? {
+                if day < today && !self.rollup_file(&target, day).exists() {
+                    self.rollup(&target, day)?;
+                    written += 1;
+                }
+            }
+        }
+        Ok(written)
     }
 
     pub fn prune(&mut self, keep_from_ms: i64) -> io::Result<usize> {
@@ -289,6 +488,7 @@ impl Store {
             for day in self.days(&target)? {
                 if day < cutoff {
                     fs::remove_file(self.day_file(&target, day))?;
+                    let _ = fs::remove_file(self.rollup_file(&target, day));
                     removed += 1;
                 }
             }
