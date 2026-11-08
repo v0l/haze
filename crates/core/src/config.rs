@@ -191,12 +191,18 @@ impl Config {
         for target in &targets {
             for alert in &target.alerts {
                 if !alerts.contains_key(alert) {
-                    return Err(format!("target `{}` uses unknown alert `{alert}`", target.path));
+                    return Err(format!(
+                        "target `{}` uses unknown alert `{alert}`",
+                        target.path
+                    ));
                 }
             }
             for dep in &target.depends {
                 if !targets.iter().any(|t| &t.path == dep) {
-                    return Err(format!("target `{}` depends on unknown target `{dep}`", target.path));
+                    return Err(format!(
+                        "target `{}` depends on unknown target `{dep}`",
+                        target.path
+                    ));
                 }
             }
         }
@@ -222,7 +228,12 @@ const NODE_KEYS: [&str; 15] = [
     "family", "source", "size", "tos", "port",
 ];
 
-fn walk(table: &toml::Table, prefix: &str, parent: &Inherited, out: &mut Vec<Target>) -> Result<(), String> {
+fn walk(
+    table: &toml::Table,
+    prefix: &str,
+    parent: &Inherited,
+    out: &mut Vec<Target>,
+) -> Result<(), String> {
     for (name, value) in table {
         let path = if prefix.is_empty() {
             name.clone()
@@ -254,7 +265,9 @@ fn walk(table: &toml::Table, prefix: &str, parent: &Inherited, out: &mut Vec<Tar
             }
             out.push(resolve(path, node, inherited)?);
         } else if nested.is_empty() {
-            return Err(format!("`{path}` has no host or url and no targets under it"));
+            return Err(format!(
+                "`{path}` has no host or url and no targets under it"
+            ));
         } else {
             walk(&nested, &path, &inherited, out)?;
         }
@@ -269,25 +282,31 @@ fn resolve(path: String, node: Node, inherited: Inherited) -> Result<Target, Str
         (None, Some(_)) => ProbeKind::Http,
         (None, None) => ProbeKind::Icmp,
     };
-    let duration = |field: &str, value: &Option<String>, default: Duration| -> Result<Duration, String> {
-        value
-            .as_deref()
-            .map(parse_duration)
-            .transpose()
-            .map(|d| d.unwrap_or(default))
-            .map_err(|e| format!("target `{path}` {field}: {e}"))
-    };
+    let duration =
+        |field: &str, value: &Option<String>, default: Duration| -> Result<Duration, String> {
+            value
+                .as_deref()
+                .map(parse_duration)
+                .transpose()
+                .map(|d| d.unwrap_or(default))
+                .map_err(|e| format!("target `{path}` {field}: {e}"))
+        };
     let step = duration("step", &s.step, Duration::from_secs(60))?;
     let timeout = duration("timeout", &s.timeout, Duration::from_secs(2))?;
     let pings = s.pings.unwrap_or(MAX_PINGS);
     if step < MIN_STEP {
-        return Err(format!("target `{path}`: step must be at least {}s", MIN_STEP.as_secs()));
+        return Err(format!(
+            "target `{path}`: step must be at least {}s",
+            MIN_STEP.as_secs()
+        ));
     }
     if pings == 0 || pings > MAX_PINGS {
         return Err(format!("target `{path}`: pings must be 1 to {MAX_PINGS}"));
     }
     if timeout >= step {
-        return Err(format!("target `{path}`: timeout must be shorter than the step"));
+        return Err(format!(
+            "target `{path}`: timeout must be shorter than the step"
+        ));
     }
     if let Some(f) = s.family
         && f != 4
@@ -383,7 +402,14 @@ port = 22
         let paths: Vec<&str> = config.targets.iter().map(|t| t.path.as_str()).collect();
         assert_eq!(
             paths,
-            ["dns/cloudflare", "dns/google", "dns/v6/cloudflare", "edge/router", "web/example", "web/ssh"]
+            [
+                "dns/cloudflare",
+                "dns/google",
+                "dns/v6/cloudflare",
+                "edge/router",
+                "web/example",
+                "web/ssh"
+            ]
         );
         let cf = config.target("dns/cloudflare").unwrap();
         assert_eq!(cf.step, Duration::from_secs(30));
@@ -417,7 +443,10 @@ port = 22
         assert_eq!(config.alerts["loss"].policy.clear_after, 2);
         assert!(matches!(
             config.alerts["slow"].matcher,
-            Matcher::Threshold { baseline_steps: 60, .. }
+            Matcher::Threshold {
+                baseline_steps: 60,
+                ..
+            }
         ));
     }
 
@@ -427,14 +456,22 @@ port = 22
 
     #[test]
     fn rejects_mistakes_with_the_target_named() {
-        assert!(error_of("[targets.a]\nhost = \"x\"\nalerts = [\"nope\"]").contains("unknown alert `nope`"));
+        assert!(
+            error_of("[targets.a]\nhost = \"x\"\nalerts = [\"nope\"]")
+                .contains("unknown alert `nope`")
+        );
         assert!(error_of("[targets.a]\nhost = \"x\"\nstep = \"1s\"").contains("at least 5s"));
         assert!(error_of("[targets.a]\nhost = \"x\"\npings = 50").contains("1 to 20"));
         assert!(error_of("[targets.a]\nhost = \"x\"\nprobe = \"tcp\"").contains("needs a port"));
-        assert!(error_of("[targets.a]\nhost = \"x\"\ndepends = [\"b\"]").contains("unknown target `b`"));
+        assert!(
+            error_of("[targets.a]\nhost = \"x\"\ndepends = [\"b\"]").contains("unknown target `b`")
+        );
         assert!(error_of("[targets.a]\nhost = \"x\"\nwobble = 1").contains("wobble"));
         assert!(error_of("[targets.a]\ntags = [\"x\"]").contains("no host or url"));
         assert!(error_of("[alerts.x]\nwhen = \"median 20\"").contains("alert `x`"));
-        assert!(error_of("[targets.a]\nhost = \"x\"\n[targets.a.b]\nhost = \"y\"").contains("cannot also hold"));
+        assert!(
+            error_of("[targets.a]\nhost = \"x\"\n[targets.a.b]\nhost = \"y\"")
+                .contains("cannot also hold")
+        );
     }
 }

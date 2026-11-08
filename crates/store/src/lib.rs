@@ -73,7 +73,9 @@ pub fn encode(step: &Step) -> Vec<u8> {
     payload.extend_from_slice(&(step.duplicates.min(u16::MAX as u32) as u16).to_le_bytes());
     payload.extend_from_slice(&(step.reordered.min(u16::MAX as u32) as u16).to_le_bytes());
     for rtt in &step.rtts {
-        let us = rtt.map(|r| r.as_micros().min(LOST as u128 - 1) as u32).unwrap_or(LOST);
+        let us = rtt
+            .map(|r| r.as_micros().min(LOST as u128 - 1) as u32)
+            .unwrap_or(LOST);
         payload.extend_from_slice(&us.to_le_bytes());
     }
     let mut record = Vec::with_capacity(8 + payload.len());
@@ -93,9 +95,11 @@ fn decode(payload: &[u8]) -> Option<Step> {
         return None;
     }
     let rtts = payload[FIXED..]
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| {
-            let us = u32::from_le_bytes(c.try_into().unwrap());
+            let us = u32::from_le_bytes(*c);
             (us != LOST).then(|| Duration::from_micros(us as u64))
         })
         .collect();
@@ -131,9 +135,9 @@ pub fn read_records(bytes: &[u8]) -> (Vec<Step>, usize) {
 
 pub fn check_path(target: &str) -> io::Result<()> {
     let bad = target.is_empty()
-        || target
-            .split('/')
-            .any(|part| part.is_empty() || part == "." || part == ".." || part.contains(['\\', '\0']));
+        || target.split('/').any(|part| {
+            part.is_empty() || part == "." || part == ".." || part.contains(['\\', '\0'])
+        });
     if bad {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -170,7 +174,11 @@ impl Store {
             self.open.retain(|(t, _), _| t != target);
             let path = self.day_file(target, day);
             fs::create_dir_all(path.parent().unwrap())?;
-            let mut file = OpenOptions::new().create(true).read(true).append(true).open(&path)?;
+            let mut file = OpenOptions::new()
+                .create(true)
+                .read(true)
+                .append(true)
+                .open(&path)?;
             let mut bytes = Vec::new();
             file.read_to_end(&mut bytes)?;
             let (_, valid) = read_records(&bytes);
@@ -216,7 +224,10 @@ impl Store {
         for entry in entries {
             let path = entry?.path();
             if path.extension().is_some_and(|e| e == EXTENSION)
-                && let Some(day) = path.file_stem().and_then(|s| s.to_str()).and_then(day_from_name)
+                && let Some(day) = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .and_then(day_from_name)
             {
                 days.push(day);
             }
@@ -243,7 +254,13 @@ impl Store {
         Ok(steps)
     }
 
-    pub fn query(&self, target: &str, from_ms: i64, to_ms: i64, width_ms: i64) -> io::Result<Vec<Bucket>> {
+    pub fn query(
+        &self,
+        target: &str,
+        from_ms: i64,
+        to_ms: i64,
+        width_ms: i64,
+    ) -> io::Result<Vec<Bucket>> {
         let width = width_ms.max(1);
         let mut buckets: Vec<Bucket> = Vec::new();
         for step in self.steps(target, from_ms, to_ms)? {
@@ -291,7 +308,10 @@ fn collect_targets(root: &Path, dir: &Path, found: &mut Vec<String>) -> io::Resu
         }
     }
     if has_days && let Ok(relative) = dir.strip_prefix(root) {
-        let parts: Vec<String> = relative.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
+        let parts: Vec<String> = relative
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect();
         found.push(parts.join("/"));
     }
     Ok(())

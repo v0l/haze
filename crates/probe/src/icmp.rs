@@ -47,7 +47,13 @@ pub fn checksum(data: &[u8]) -> u16 {
     !(sum as u16)
 }
 
-pub fn echo_request(v6: bool, identifier: u16, seq: u16, token: &[u8; TOKEN], size: usize) -> Vec<u8> {
+pub fn echo_request(
+    v6: bool,
+    identifier: u16,
+    seq: u16,
+    token: &[u8; TOKEN],
+    size: usize,
+) -> Vec<u8> {
     let mut packet = vec![0u8; HEADER + size.max(TOKEN)];
     packet[0] = if v6 { ECHO_REQUEST_V6 } else { ECHO_REQUEST_V4 };
     packet[4..6].copy_from_slice(&identifier.to_be_bytes());
@@ -81,7 +87,11 @@ pub fn parse_reply(v6: bool, token: &[u8; TOKEN], data: &[u8]) -> Option<u16> {
 }
 
 pub fn unprivileged_ping_allowed() -> Result<(), String> {
-    match Socket::new(socket2::Domain::IPV4, socket2::Type::DGRAM, Some(Protocol::ICMPV4)) {
+    match Socket::new(
+        socket2::Domain::IPV4,
+        socket2::Type::DGRAM,
+        Some(Protocol::ICMPV4),
+    ) {
         Ok(_) => Ok(()),
         Err(e) => {
             let range = std::fs::read_to_string("/proc/sys/net/ipv4/ping_group_range")
@@ -97,10 +107,17 @@ pub fn unprivileged_ping_allowed() -> Result<(), String> {
 impl Icmp {
     pub fn new(target: IpAddr, size: usize, options: &SocketOptions) -> io::Result<Icmp> {
         let v6 = target.is_ipv6();
-        let protocol = if v6 { Protocol::ICMPV6 } else { Protocol::ICMPV4 };
+        let protocol = if v6 {
+            Protocol::ICMPV6
+        } else {
+            Protocol::ICMPV4
+        };
         let socket = datagram(target, Some(protocol), options).map_err(|e| {
             if e.kind() == io::ErrorKind::PermissionDenied {
-                io::Error::new(io::ErrorKind::PermissionDenied, unprivileged_ping_allowed().err().unwrap_or(e.to_string()))
+                io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    unprivileged_ping_allowed().err().unwrap_or(e.to_string()),
+                )
             } else {
                 e
             }
@@ -122,7 +139,12 @@ impl Icmp {
     }
 }
 
-async fn receive(socket: Arc<AsyncFd<Socket>>, v6: bool, token: [u8; TOKEN], correlator: Arc<Correlator>) {
+async fn receive(
+    socket: Arc<AsyncFd<Socket>>,
+    v6: bool,
+    token: [u8; TOKEN],
+    correlator: Arc<Correlator>,
+) {
     let mut buf = [0u8; 65536];
     loop {
         let Ok(mut guard) = socket.readable().await else {
@@ -162,7 +184,10 @@ impl Probe for Icmp {
                     Err(_) => continue,
                 }
             }
-            let rtt = self.correlator.wait(seq, rx, sent, sent_wall, timeout).await?;
+            let rtt = self
+                .correlator
+                .wait(seq, rx, sent, sent_wall, timeout)
+                .await?;
             Ok(Reply::rtt(rtt))
         })
     }

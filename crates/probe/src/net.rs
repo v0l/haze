@@ -9,8 +9,16 @@ pub struct SocketOptions {
     pub tos: Option<u8>,
 }
 
-pub fn datagram(target: IpAddr, protocol: Option<Protocol>, options: &SocketOptions) -> io::Result<Socket> {
-    let domain = if target.is_ipv4() { Domain::IPV4 } else { Domain::IPV6 };
+pub fn datagram(
+    target: IpAddr,
+    protocol: Option<Protocol>,
+    options: &SocketOptions,
+) -> io::Result<Socket> {
+    let domain = if target.is_ipv4() {
+        Domain::IPV4
+    } else {
+        Domain::IPV6
+    };
     let socket = Socket::new(domain, Type::DGRAM, protocol)?;
     prepare(&socket, target, options)?;
     enable_timestamps(&socket);
@@ -40,7 +48,7 @@ pub fn prepare(socket: &Socket, target: IpAddr, options: &SocketOptions) -> io::
 }
 
 #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
-fn enable_timestamps(socket: &Socket) {
+pub fn enable_timestamps(socket: &Socket) {
     use std::os::fd::AsRawFd;
     let on: libc::c_int = 1;
     unsafe {
@@ -55,7 +63,7 @@ fn enable_timestamps(socket: &Socket) {
 }
 
 #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
-fn enable_timestamps(_socket: &Socket) {}
+pub fn enable_timestamps(_socket: &Socket) {}
 
 #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
 pub fn recv_stamped(socket: &Socket, buf: &mut [u8]) -> io::Result<(usize, Option<SystemTime>)> {
@@ -78,10 +86,14 @@ pub fn recv_stamped(socket: &Socket, buf: &mut [u8]) -> io::Result<(usize, Optio
     unsafe {
         let mut cmsg = libc::CMSG_FIRSTHDR(&msg);
         while !cmsg.is_null() {
-            if (*cmsg).cmsg_level == libc::SOL_SOCKET && (*cmsg).cmsg_type == libc::SCM_TIMESTAMPNS {
+            if (*cmsg).cmsg_level == libc::SOL_SOCKET && (*cmsg).cmsg_type == libc::SCM_TIMESTAMPNS
+            {
                 let ts: libc::timespec =
                     std::ptr::read_unaligned(libc::CMSG_DATA(cmsg) as *const libc::timespec);
-                stamp = Some(SystemTime::UNIX_EPOCH + std::time::Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32));
+                stamp = Some(
+                    SystemTime::UNIX_EPOCH
+                        + std::time::Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32),
+                );
             }
             cmsg = libc::CMSG_NXTHDR(&msg, cmsg);
         }
@@ -100,7 +112,10 @@ pub async fn resolve(host: &str, family: Option<u8>) -> io::Result<IpAddr> {
     if let Ok(ip) = host.trim_matches(['[', ']']).parse::<IpAddr>() {
         return Ok(ip);
     }
-    let addrs: Vec<IpAddr> = tokio::net::lookup_host((host, 0)).await?.map(|a| a.ip()).collect();
+    let addrs: Vec<IpAddr> = tokio::net::lookup_host((host, 0))
+        .await?
+        .map(|a| a.ip())
+        .collect();
     let wanted = |ip: &&IpAddr| match family {
         Some(4) => ip.is_ipv4(),
         Some(6) => ip.is_ipv6(),
@@ -109,7 +124,10 @@ pub async fn resolve(host: &str, family: Option<u8>) -> io::Result<IpAddr> {
     addrs.iter().find(wanted).copied().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::NotFound,
-            format!("{host} has no {} address", family.map(|f| format!("IPv{f}")).unwrap_or_default()),
+            format!(
+                "{host} has no {} address",
+                family.map(|f| format!("IPv{f}")).unwrap_or_default()
+            ),
         )
     })
 }

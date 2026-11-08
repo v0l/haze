@@ -201,7 +201,10 @@ mod tests {
         for q in QUANTILES {
             let estimate = merged.quantile(q).unwrap();
             let exact = exact_quantile(&all, q).unwrap();
-            assert!(within_bound(estimate, exact), "q {q}: {estimate:?} vs {exact:?}");
+            assert!(
+                within_bound(estimate, exact),
+                "q {q}: {estimate:?} vs {exact:?}"
+            );
         }
     }
 

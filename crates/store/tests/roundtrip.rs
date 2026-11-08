@@ -25,7 +25,9 @@ fn step(start_ms: i64, base_us: u64) -> Step {
 #[test]
 fn steps_survive_a_restart() {
     let dir = tempfile::tempdir().unwrap();
-    let written: Vec<Step> = (0..50).map(|i| step(T0 + i * 60_000, 10_000 + i as u64)).collect();
+    let written: Vec<Step> = (0..50)
+        .map(|i| step(T0 + i * 60_000, 10_000 + i as u64))
+        .collect();
     {
         let mut store = Store::open(dir.path()).unwrap();
         for s in &written {
@@ -42,9 +44,18 @@ fn steps_survive_a_restart() {
 #[test]
 fn appending_after_a_restart_continues_the_day_file() {
     let dir = tempfile::tempdir().unwrap();
-    Store::open(dir.path()).unwrap().append("a", &step(T0, 5_000)).unwrap();
-    Store::open(dir.path()).unwrap().append("a", &step(T0 + 60_000, 6_000)).unwrap();
-    let steps = Store::open(dir.path()).unwrap().steps("a", T0, T0 + DAY).unwrap();
+    Store::open(dir.path())
+        .unwrap()
+        .append("a", &step(T0, 5_000))
+        .unwrap();
+    Store::open(dir.path())
+        .unwrap()
+        .append("a", &step(T0 + 60_000, 6_000))
+        .unwrap();
+    let steps = Store::open(dir.path())
+        .unwrap()
+        .steps("a", T0, T0 + DAY)
+        .unwrap();
     assert_eq!(steps.len(), 2);
 }
 
@@ -56,7 +67,10 @@ fn a_torn_last_record_is_dropped_and_overwritten() {
         store.append("a", &step(T0, 5_000)).unwrap();
         store.append("a", &step(T0 + 60_000, 6_000)).unwrap();
     }
-    let file = dir.path().join("a").join(format!("{}.pws", date_name(day_of(T0))));
+    let file = dir
+        .path()
+        .join("a")
+        .join(format!("{}.pws", date_name(day_of(T0))));
     let full = std::fs::metadata(&file).unwrap().len();
     let f = OpenOptions::new().write(true).open(&file).unwrap();
     f.set_len(full - 7).unwrap();
@@ -68,7 +82,10 @@ fn a_torn_last_record_is_dropped_and_overwritten() {
     let mut store = Store::open(dir.path()).unwrap();
     assert_eq!(store.steps("a", T0, T0 + DAY).unwrap().len(), 1);
     store.append("a", &step(T0 + 120_000, 7_000)).unwrap();
-    let steps = Store::open(dir.path()).unwrap().steps("a", T0, T0 + DAY).unwrap();
+    let steps = Store::open(dir.path())
+        .unwrap()
+        .steps("a", T0, T0 + DAY)
+        .unwrap();
     let starts: Vec<i64> = steps.iter().map(|s| s.start_ms).collect();
     assert_eq!(starts, [T0, T0 + 120_000]);
 }
@@ -78,7 +95,12 @@ fn steps_land_in_their_utc_day_and_queries_span_days() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = Store::open(dir.path()).unwrap();
     let midnight = (T0 / DAY + 1) * DAY;
-    let starts = [midnight - 120_000, midnight - 60_000, midnight, midnight + 60_000];
+    let starts = [
+        midnight - 120_000,
+        midnight - 60_000,
+        midnight,
+        midnight + 60_000,
+    ];
     for s in starts {
         store.append("x", &step(s, 1_000)).unwrap();
     }
@@ -93,7 +115,9 @@ fn steps_land_in_their_utc_day_and_queries_span_days() {
 fn query_buckets_merge_step_histograms() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = Store::open(dir.path()).unwrap();
-    let steps: Vec<Step> = (0..120).map(|i| step(T0 + i * 60_000, 8_000 + (i as u64 % 7) * 500)).collect();
+    let steps: Vec<Step> = (0..120)
+        .map(|i| step(T0 + i * 60_000, 8_000 + (i as u64 % 7) * 500))
+        .collect();
     for s in &steps {
         store.append("t", s).unwrap();
     }

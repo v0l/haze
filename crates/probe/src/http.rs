@@ -36,7 +36,9 @@ impl std::str::FromStr for Url {
             None => (rest, "/"),
         };
         let (host, port) = if let Some(v6) = authority.strip_prefix('[') {
-            let end = v6.find(']').ok_or_else(|| format!("`{text}` has an unclosed ["))?;
+            let end = v6
+                .find(']')
+                .ok_or_else(|| format!("`{text}` has an unclosed ["))?;
             let port = v6[end + 1..].strip_prefix(':');
             (v6[..end].to_string(), port)
         } else {
@@ -84,11 +86,13 @@ pub struct HttpTiming {
 
 pub fn tls_connector() -> TlsConnector {
     let roots = rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    let config = rustls::ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
-        .with_safe_default_protocol_versions()
-        .expect("ring supports the default TLS versions")
-        .with_root_certificates(roots)
-        .with_no_client_auth();
+    let config = rustls::ClientConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .expect("ring supports the default TLS versions")
+    .with_root_certificates(roots)
+    .with_no_client_auth();
     TlsConnector::from(Arc::new(config))
 }
 
@@ -105,14 +109,18 @@ impl Http {
 
     pub async fn fetch(&self) -> Result<HttpTiming, ProbeError> {
         let started = Instant::now();
-        let ip = resolve(&self.url.host, self.family).await.map_err(failure)?;
+        let ip = resolve(&self.url.host, self.family)
+            .await
+            .map_err(failure)?;
         let dns = started.elapsed();
         let stream = connect(SocketAddr::new(ip, self.url.port), self.source, self.tos)
             .await
             .map_err(failure)?;
         let connect = started.elapsed();
         if !self.url.tls {
-            return self.exchange(stream, started, dns, connect, None, None).await;
+            return self
+                .exchange(stream, started, dns, connect, None, None)
+                .await;
         }
         let name = ServerName::try_from(self.url.host.clone())
             .map_err(|e| ProbeError::Failed(format!("bad server name: {e}")))?;
@@ -128,7 +136,8 @@ impl Http {
             .peer_certificates()
             .and_then(|certs| certs.first())
             .and_then(|cert| cert_days_left(cert.as_ref()));
-        self.exchange(stream, started, dns, connect, Some(tls), days).await
+        self.exchange(stream, started, dns, connect, Some(tls), days)
+            .await
     }
 
     async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(
@@ -150,16 +159,22 @@ impl Http {
             self.url.path,
             env!("CARGO_PKG_VERSION"),
         );
-        stream.write_all(request.as_bytes()).await.map_err(failure)?;
+        stream
+            .write_all(request.as_bytes())
+            .await
+            .map_err(failure)?;
         let mut body = Vec::with_capacity(16 * 1024);
         let mut buf = [0u8; 16 * 1024];
         let first = stream.read(&mut buf).await.map_err(failure)?;
         let ttfb = started.elapsed();
         if first == 0 {
-            return Err(ProbeError::Failed("connection closed before a response".into()));
+            return Err(ProbeError::Failed(
+                "connection closed before a response".into(),
+            ));
         }
         body.extend_from_slice(&buf[..first]);
-        let status = parse_status(&body).ok_or_else(|| ProbeError::Failed("not an HTTP response".into()))?;
+        let status =
+            parse_status(&body).ok_or_else(|| ProbeError::Failed("not an HTTP response".into()))?;
         while body.len() < BODY_LIMIT && !response_complete(&body) {
             match stream.read(&mut buf).await {
                 Ok(0) => break,
@@ -246,11 +261,17 @@ mod tests {
     #[test]
     fn parses_urls() {
         let url: Url = "https://example.com/".parse().unwrap();
-        assert_eq!((url.tls, url.host.as_str(), url.port, url.path.as_str()), (true, "example.com", 443, "/"));
+        assert_eq!(
+            (url.tls, url.host.as_str(), url.port, url.path.as_str()),
+            (true, "example.com", 443, "/")
+        );
         let url: Url = "http://127.0.0.1:8080/health?x=1".parse().unwrap();
         assert_eq!((url.port, url.path.as_str()), (8080, "/health?x=1"));
         let url: Url = "http://[::1]:81".parse().unwrap();
-        assert_eq!((url.host.as_str(), url.port, url.path.as_str()), ("::1", 81, "/"));
+        assert_eq!(
+            (url.host.as_str(), url.port, url.path.as_str()),
+            ("::1", 81, "/")
+        );
         assert!("ftp://x".parse::<Url>().is_err());
         assert!("http://:80/".parse::<Url>().is_err());
     }
@@ -259,8 +280,14 @@ mod tests {
     fn reads_status_and_completion() {
         assert_eq!(parse_status(b"HTTP/1.1 204 No Content\r\n\r\n"), Some(204));
         assert_eq!(parse_status(b"SSH-2.0-OpenSSH\r\n"), None);
-        assert!(response_complete(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi"));
-        assert!(!response_complete(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhi"));
-        assert!(response_complete(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nhi\r\n0\r\n\r\n"));
+        assert!(response_complete(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi"
+        ));
+        assert!(!response_complete(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhi"
+        ));
+        assert!(response_complete(
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nhi\r\n0\r\n\r\n"
+        ));
     }
 }

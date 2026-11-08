@@ -77,7 +77,10 @@ impl Correlator {
 
 pub fn rtt_of(arrival: Arrival, sent: Instant, sent_wall: SystemTime) -> Duration {
     let user = arrival.at.saturating_duration_since(sent);
-    match arrival.kernel.and_then(|k| k.duration_since(sent_wall).ok()) {
+    match arrival
+        .kernel
+        .and_then(|k| k.duration_since(sent_wall).ok())
+    {
         Some(kernel) if kernel <= user + Duration::from_millis(1) => kernel,
         _ => user,
     }

@@ -21,9 +21,15 @@ pub async fn build(target: &Target) -> Result<Arc<dyn Probe>, String> {
     let source = target
         .source
         .as_deref()
-        .map(|s| s.parse::<IpAddr>().map_err(|_| format!("`{s}` is not a source address")))
+        .map(|s| {
+            s.parse::<IpAddr>()
+                .map_err(|_| format!("`{s}` is not a source address"))
+        })
         .transpose()?;
-    let options = SocketOptions { source, tos: target.tos };
+    let options = SocketOptions {
+        source,
+        tos: target.tos,
+    };
     let address = || async {
         let host = target.host.as_deref().unwrap_or_default();
         net::resolve(host, target.family)
@@ -32,7 +38,9 @@ pub async fn build(target: &Target) -> Result<Arc<dyn Probe>, String> {
     };
     Ok(match target.probe {
         #[cfg(unix)]
-        ProbeKind::Icmp => Arc::new(icmp::Icmp::new(address().await?, target.size, &options).map_err(|e| e.to_string())?),
+        ProbeKind::Icmp => Arc::new(
+            icmp::Icmp::new(address().await?, target.size, &options).map_err(|e| e.to_string())?,
+        ),
         #[cfg(not(unix))]
         ProbeKind::Icmp => return Err("ICMP is not supported on this platform yet".into()),
         ProbeKind::Tcp => Arc::new(tcp::TcpConnect::new(
@@ -40,11 +48,19 @@ pub async fn build(target: &Target) -> Result<Arc<dyn Probe>, String> {
             &options,
         )),
         ProbeKind::Udp => Arc::new(
-            udp::UdpEcho::new(SocketAddr::new(address().await?, target.port.unwrap_or_default()), target.size, &options)
-                .await
-                .map_err(|e| e.to_string())?,
+            udp::UdpEcho::new(
+                SocketAddr::new(address().await?, target.port.unwrap_or_default()),
+                target.size,
+                &options,
+            )
+            .await
+            .map_err(|e| e.to_string())?,
         ),
-        ProbeKind::Http => Arc::new(http::Http::new(target.url.as_deref().unwrap_or_default(), target.family, &options)?),
+        ProbeKind::Http => Arc::new(http::Http::new(
+            target.url.as_deref().unwrap_or_default(),
+            target.family,
+            &options,
+        )?),
     })
 }
 
@@ -67,7 +83,12 @@ impl Sampler {
         }
     }
 
-    pub async fn step(&self, pings: u32, interval: Duration, timeout: Duration) -> (Step, StepDetail) {
+    pub async fn step(
+        &self,
+        pings: u32,
+        interval: Duration,
+        timeout: Duration,
+    ) -> (Step, StepDetail) {
         let start_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis() as i64)

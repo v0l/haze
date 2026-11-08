@@ -1,0 +1,46 @@
+[defaults]
+step = "60s"
+pings = 20
+timeout = "2s"
+
+[storage]
+dir = "demo-data"
+
+[alerts.loss]
+when = "loss >= 10% for 3 steps"
+comment = "sustained packet loss"
+
+[alerts.slow]
+when = "median > 2x baseline 3 of 5"
+baseline_steps = 60
+
+[alerts.smoky]
+when = "smoke > 50ms 2 of 3"
+
+[targets.dns]
+tags = ["dns", "anycast"]
+alerts = ["loss", "slow"]
+
+[targets.dns.cloudflare]
+host = "1.1.1.1"
+
+[targets.dns.google]
+host = "8.8.8.8"
+
+[targets.nostr.damus]
+title = "relay.damus.io WebSocket port"
+host = "relay.damus.io"
+probe = "tcp"
+port = 443
+alerts = ["loss"]
+
+[targets.web.example]
+url = "https://example.com/"
+pings = 5
+timeout = "5s"
+alerts = ["smoky"]
+
+[targets.lnvps.lg]
+title = "LNVPS looking glass"
+host = "lg.lnvps.cloud"
+alerts = ["loss", "slow"]

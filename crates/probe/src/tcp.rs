@@ -27,7 +27,11 @@ pub async fn connect(
     source: Option<std::net::IpAddr>,
     tos: Option<u8>,
 ) -> std::io::Result<TcpStream> {
-    let socket = if target.is_ipv4() { TcpSocket::new_v4()? } else { TcpSocket::new_v6()? };
+    let socket = if target.is_ipv4() {
+        TcpSocket::new_v4()?
+    } else {
+        TcpSocket::new_v6()?
+    };
     if let Some(source) = source {
         socket.bind(SocketAddr::new(source, 0))?;
     }

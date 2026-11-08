@@ -47,7 +47,10 @@ impl Step {
 
     pub fn histogram(&self) -> Histogram {
         let mut histogram = Histogram::new();
-        self.rtts.iter().flatten().for_each(|r| histogram.record(*r));
+        self.rtts
+            .iter()
+            .flatten()
+            .for_each(|r| histogram.record(*r));
         histogram
     }
 
@@ -57,8 +60,7 @@ impl Step {
         let sent = self.sent();
         let received = sorted.len() as u32;
         let q = |p| exact_quantile(&sorted, p);
-        let mean = (!sorted.is_empty())
-            .then(|| sorted.iter().sum::<Duration>() / received);
+        let mean = (!sorted.is_empty()).then(|| sorted.iter().sum::<Duration>() / received);
         let p99 = q(0.99);
         Summary {
             sent,
@@ -119,9 +121,7 @@ pub fn smoke_line(step: &Step, scale_max: Duration) -> String {
     let summary = step.summary();
     let mut cells = [0u32; SMOKE_WIDTH];
     let scale = scale_max.as_secs_f64().max(1e-6);
-    let cell_of = |d: Duration| {
-        ((d.as_secs_f64() / scale) * SMOKE_WIDTH as f64).floor() as usize
-    };
+    let cell_of = |d: Duration| ((d.as_secs_f64() / scale) * SMOKE_WIDTH as f64).floor() as usize;
     for rtt in step.rtts.iter().flatten() {
         cells[cell_of(*rtt).min(SMOKE_WIDTH - 1)] += 1;
     }

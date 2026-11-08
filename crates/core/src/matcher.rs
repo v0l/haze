@@ -147,7 +147,10 @@ fn parse_window(words: &[&str]) -> Result<Window, String> {
             let n: usize = n.parse().map_err(|_| format!("`{n}` is not a count"))?;
             Ok(Window { hits: k, of: n })
         }
-        other => Err(format!("`{}` is not a window like `for 3 steps` or `3 of 5`", other.join(" "))),
+        other => Err(format!(
+            "`{}` is not a window like `for 3 steps` or `3 of 5`",
+            other.join(" ")
+        )),
     }
     .and_then(|w| {
         if w.hits == 0 || w.hits > w.of {
@@ -197,7 +200,10 @@ impl std::str::FromStr for Matcher {
 
     fn from_str(text: &str) -> Result<Self, String> {
         let text = text.trim();
-        for (prefix, kind) in [("loss pattern", PatternKind::Loss), ("rtt pattern", PatternKind::Rtt)] {
+        for (prefix, kind) in [
+            ("loss pattern", PatternKind::Loss),
+            ("rtt pattern", PatternKind::Rtt),
+        ] {
             if let Some(rest) = text.strip_prefix(prefix) {
                 let items = rest
                     .split(',')
@@ -219,7 +225,12 @@ impl std::str::FromStr for Matcher {
         let window_at = words
             .iter()
             .position(|w| *w == "for")
-            .or_else(|| words.iter().position(|w| *w == "of").map(|i| i.saturating_sub(1)))
+            .or_else(|| {
+                words
+                    .iter()
+                    .position(|w| *w == "of")
+                    .map(|i| i.saturating_sub(1))
+            })
             .unwrap_or(words.len());
         let threshold = parse_threshold(&words[..window_at].join(" "), metric)?;
         let window = parse_window(&words[window_at..])?;
@@ -276,7 +287,7 @@ fn median(mut values: Vec<f64>) -> Option<f64> {
 
 fn pattern_value(summary: &Summary, kind: PatternKind) -> Option<f64> {
     match kind {
-        PatternKind::Loss => (summary.sent > 0).then(|| summary.loss * 100.0),
+        PatternKind::Loss => (summary.sent > 0).then_some(summary.loss * 100.0),
         PatternKind::Rtt => metric_ms(summary, Metric::Median),
     }
 }
@@ -500,9 +511,19 @@ mod tests {
         );
         assert!(matches!(
             m("smoke > 2x baseline"),
-            Matcher::Threshold { threshold: Threshold::Baseline(2.0), window: Window { hits: 1, of: 1 }, .. }
+            Matcher::Threshold {
+                threshold: Threshold::Baseline(2.0),
+                window: Window { hits: 1, of: 1 },
+                ..
+            }
         ));
-        assert!(matches!(m("p90>1.5x baseline for 2 steps"), Matcher::Threshold { metric: Metric::Percentile(90), .. }));
+        assert!(matches!(
+            m("p90>1.5x baseline for 2 steps"),
+            Matcher::Threshold {
+                metric: Metric::Percentile(90),
+                ..
+            }
+        ));
         assert_eq!(
             m("loss pattern ==0%,*2*,>20%,==U"),
             Matcher::Pattern {
@@ -566,7 +587,10 @@ mod tests {
         let mut quiet = rtt(&[10.0; 10]);
         quiet.extend(rtt(&[25.0, 15.0]));
         assert!(!rule.matches(&quiet));
-        assert!(!rule.matches(&rtt(&[25.0, 25.0])), "no history, no baseline");
+        assert!(
+            !rule.matches(&rtt(&[25.0, 25.0])),
+            "no history, no baseline"
+        );
         let short = m("median > 2x baseline").with_baseline_steps(3);
         assert!(short.matches(&rtt(&[100.0, 100.0, 100.0, 10.0, 10.0, 10.0, 25.0])));
     }
@@ -579,7 +603,9 @@ mod tests {
         let twice = m("loss pattern >10%,*10*,>10%");
         assert!(twice.matches(&loss(&[20.0, 0.0, 0.0, 0.0, 0.0, 0.0, 30.0])));
         assert!(twice.matches(&loss(&[20.0, 30.0])));
-        assert!(!twice.matches(&loss(&[20.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 30.0])));
+        assert!(!twice.matches(&loss(&[
+            20.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 30.0
+        ])));
         let down = m("rtt pattern !=U,==U,==U");
         assert!(down.matches(&loss(&[0.0, 100.0, 100.0])));
         assert!(!down.matches(&loss(&[100.0, 100.0, 100.0])));
@@ -599,23 +625,45 @@ mod tests {
         let events = run(&[false, true, true, true, false, false], &policy);
         assert_eq!(
             events,
-            vec![None, Some(AlertEvent::Raised), None, None, Some(AlertEvent::Cleared), None]
+            vec![
+                None,
+                Some(AlertEvent::Raised),
+                None,
+                None,
+                Some(AlertEvent::Cleared),
+                None
+            ]
         );
     }
 
     #[test]
     fn clear_after_holds_the_alert_through_short_gaps() {
-        let policy = AlertPolicy { clear_after: 3, ..AlertPolicy::default() };
+        let policy = AlertPolicy {
+            clear_after: 3,
+            ..AlertPolicy::default()
+        };
         let events = run(&[true, false, false, true, false, false, false], &policy);
         assert_eq!(
             events,
-            vec![Some(AlertEvent::Raised), None, None, None, None, None, Some(AlertEvent::Cleared)]
+            vec![
+                Some(AlertEvent::Raised),
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(AlertEvent::Cleared)
+            ]
         );
     }
 
     #[test]
     fn flapping_is_reported_once_then_silenced_until_it_settles() {
-        let policy = AlertPolicy { clear_after: 1, flap_window: 6, flap_limit: 4 };
+        let policy = AlertPolicy {
+            clear_after: 1,
+            flap_window: 6,
+            flap_limit: 4,
+        };
         let mut series = vec![true, false, true, false];
         series.extend([true, false, true, false]);
         series.extend([true; 7]);
