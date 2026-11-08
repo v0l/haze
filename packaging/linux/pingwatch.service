@@ -1,0 +1,19 @@
+[Unit]
+Description=pingwatch latency and loss monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/pingwatch run /etc/pingwatch/config.toml
+DynamicUser=yes
+StateDirectory=pingwatch
+WorkingDirectory=/var/lib/pingwatch
+Restart=on-failure
+RestartSec=5
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target
