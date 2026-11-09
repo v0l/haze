@@ -1,5 +1,6 @@
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use haze_core::probe::parse_retry_after;
@@ -9,7 +10,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio_rustls::TlsConnector;
 
 use crate::net::{SocketOptions, resolve};
-use crate::tcp::{connect, failure, tls_failure};
+use crate::tcp::{close_gently, connect, failure, tls_failure};
 
 const BODY_LIMIT: usize = 1 << 20;
 
@@ -71,10 +72,17 @@ pub struct Http {
     source: Option<IpAddr>,
     tos: Option<u8>,
     tls: TlsConnector,
-    method: &'static str,
+    method: Option<&'static str>,
+    head_refused: AtomicBool,
     headers: Vec<(String, String)>,
     body: Vec<u8>,
 }
+
+pub const USER_AGENT: &str = concat!(
+    "haze/",
+    env!("CARGO_PKG_VERSION"),
+    " (+https://github.com/v0l/haze)"
+);
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct HttpTiming {
@@ -109,10 +117,29 @@ impl Http {
             source: options.source,
             tos: options.tos,
             tls: tls_connector(),
-            method: "GET",
+            method: None,
+            head_refused: AtomicBool::new(false),
             headers: Vec::new(),
             body: Vec::new(),
         })
+    }
+
+    pub fn with_method(mut self, method: Option<&str>) -> Result<Http, String> {
+        self.method = match method.map(|m| m.to_ascii_uppercase()).as_deref() {
+            None => None,
+            Some("HEAD") => Some("HEAD"),
+            Some("GET") => Some("GET"),
+            Some(other) => return Err(format!("method `{other}` is not HEAD or GET")),
+        };
+        Ok(self)
+    }
+
+    fn method(&self) -> &'static str {
+        match self.method {
+            Some(m) => m,
+            None if self.head_refused.load(Ordering::Relaxed) => "GET",
+            None => "HEAD",
+        }
     }
 
     pub fn post(url: &str, headers: Vec<(String, String)>, body: Vec<u8>) -> Result<Http, String> {
@@ -124,13 +151,23 @@ impl Http {
                 tos: None,
             },
         )?;
-        http.method = "POST";
+        http.method = Some("POST");
         http.headers = headers;
         http.body = body;
         Ok(http)
     }
 
     pub async fn fetch(&self) -> Result<HttpTiming, ProbeError> {
+        let method = self.method();
+        let timing = self.fetch_with(method).await?;
+        if self.method.is_none() && method == "HEAD" && matches!(timing.status, 405 | 501) {
+            self.head_refused.store(true, Ordering::Relaxed);
+            return self.fetch_with("GET").await;
+        }
+        Ok(timing)
+    }
+
+    async fn fetch_with(&self, method: &'static str) -> Result<HttpTiming, ProbeError> {
         let started = Instant::now();
         let ip = resolve(&self.url.host, self.family)
             .await
@@ -142,7 +179,7 @@ impl Http {
         let connect = started.elapsed();
         if !self.url.tls {
             return self
-                .exchange(stream, started, dns, connect, None, None)
+                .exchange(stream, method, started, dns, connect, None, None)
                 .await;
         }
         let name = ServerName::try_from(self.url.host.clone())
@@ -155,13 +192,15 @@ impl Http {
             .peer_certificates()
             .and_then(|certs| certs.first())
             .and_then(|cert| cert_days_left(cert.as_ref()));
-        self.exchange(stream, started, dns, connect, Some(tls), days)
+        self.exchange(stream, method, started, dns, connect, Some(tls), days)
             .await
     }
 
-    async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(
+    #[allow(clippy::too_many_arguments)]
+    async fn exchange<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
         &self,
         mut stream: S,
+        method: &'static str,
         started: Instant,
         dns: Duration,
         connect: Duration,
@@ -174,15 +213,13 @@ impl Http {
             self.url.host.clone()
         };
         let mut request = format!(
-            "{} {} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: haze/{}\r\nAccept: */*\r\nConnection: close\r\n",
-            self.method,
+            "{method} {} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: {USER_AGENT}\r\nAccept: */*\r\nConnection: close\r\n",
             self.url.path,
-            env!("CARGO_PKG_VERSION"),
         );
         for (name, value) in &self.headers {
             request.push_str(&format!("{name}: {value}\r\n"));
         }
-        if self.method != "GET" {
+        if !matches!(method, "GET" | "HEAD") {
             request.push_str(&format!("Content-Length: {}\r\n", self.body.len()));
         }
         request.push_str("\r\n");
@@ -201,7 +238,14 @@ impl Http {
         body.extend_from_slice(&buf[..first]);
         let status =
             parse_status(&body).ok_or_else(|| ProbeError::Failed("not an HTTP response".into()))?;
-        while body.len() < BODY_LIMIT && !response_complete(&body) {
+        let complete = |body: &[u8]| {
+            if method == "HEAD" {
+                body.windows(4).any(|w| w == b"\r\n\r\n")
+            } else {
+                response_complete(body)
+            }
+        };
+        while body.len() < BODY_LIMIT && !complete(&body) {
             match stream.read(&mut buf).await {
                 Ok(0) => break,
                 Ok(n) => body.extend_from_slice(&buf[..n]),
@@ -209,6 +253,8 @@ impl Http {
                 Err(e) => return Err(failure(e)),
             }
         }
+        let total = started.elapsed();
+        close_gently(stream);
         Ok(HttpTiming {
             status,
             retry_after: header(&body, "retry-after").and_then(|v| parse_retry_after(&v)),
@@ -216,7 +262,7 @@ impl Http {
             connect: connect - dns,
             tls,
             ttfb,
-            total: started.elapsed(),
+            total,
             cert_days_left,
             bytes: body.len(),
         })

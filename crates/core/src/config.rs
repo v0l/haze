@@ -520,6 +520,13 @@ fn resolve(path: String, node: Node, inherited: Inherited) -> Result<Target, Str
             "target `{path}`: record `{record}` is not A, AAAA, NS, MX, TXT, SOA or CNAME"
         ));
     }
+    if let Some(method) = &s.method
+        && !matches!(method.to_ascii_uppercase().as_str(), "HEAD" | "GET")
+    {
+        return Err(format!(
+            "target `{path}`: method `{method}` is not HEAD or GET"
+        ));
+    }
     if matches!(probe, ProbeKind::Tcp | ProbeKind::Udp) && s.port.is_none() {
         return Err(format!(
             "target `{path}`: the {} probe needs a port",
@@ -809,6 +816,10 @@ step = "30s"
         assert!(error_of("[targets.a]\nhost = \"x\"\nstep = \"1s\"").contains("at least 5s"));
         assert!(error_of("[targets.a]\nhost = \"x\"\npings = 50").contains("1 to 20"));
         assert!(error_of("[targets.a]\nhost = \"x\"\nprobe = \"tcp\"").contains("needs a port"));
+        assert!(
+            error_of("[targets.a]\nurl = \"https://x/\"\nmethod = \"POST\"")
+                .contains("not HEAD or GET")
+        );
         assert!(
             error_of("[targets.a]\nhost = \"x\"\ndepends = [\"b\"]").contains("unknown target `b`")
         );

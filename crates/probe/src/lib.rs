@@ -59,11 +59,14 @@ pub async fn build(target: &Target) -> Result<Arc<dyn Probe>, String> {
             .await
             .map_err(|e| e.to_string())?,
         ),
-        ProbeKind::Http => Arc::new(http::Http::new(
-            target.url.as_deref().unwrap_or_default(),
-            target.family,
-            &options,
-        )?),
+        ProbeKind::Http => Arc::new(
+            http::Http::new(
+                target.url.as_deref().unwrap_or_default(),
+                target.family,
+                &options,
+            )?
+            .with_method(target.method.as_deref())?,
+        ),
         ProbeKind::Nostr => Arc::new(nostr::Relay::new(
             target.url.as_deref().unwrap_or_default(),
             target.event.as_deref(),

@@ -2,6 +2,7 @@ use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 use haze_core::{Probe, ProbeError, ProbeFuture, Reply};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpSocket, TcpStream};
 
 use crate::net::SocketOptions;
@@ -70,6 +71,26 @@ pub fn tls_failure(e: std::io::Error) -> ProbeError {
     }
 }
 
+pub const CLOSE_GRACE: Duration = Duration::from_secs(3);
+
+pub fn close_gently<S>(mut stream: S)
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    tokio::spawn(async move {
+        let _ = tokio::time::timeout(CLOSE_GRACE, async {
+            let _ = stream.shutdown().await;
+            let mut buf = [0u8; 4096];
+            while let Ok(n) = stream.read(&mut buf).await {
+                if n == 0 {
+                    break;
+                }
+            }
+        })
+        .await;
+    });
+}
+
 impl Probe for TcpConnect {
     fn probe(&self, _seq: u16, timeout: Duration) -> ProbeFuture<'_> {
         Box::pin(async move {
@@ -79,7 +100,7 @@ impl Probe for TcpConnect {
                 .map_err(|_| ProbeError::Timeout)?
                 .map_err(failure)?;
             let rtt = started.elapsed();
-            drop(stream);
+            close_gently(stream);
             Ok(Reply::rtt(rtt))
         })
     }

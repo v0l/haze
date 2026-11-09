@@ -92,7 +92,7 @@ impl Relay {
             .as_str()
             .into_client_request()
             .map_err(|e| ProbeError::Failed(e.to_string()))?;
-        if let Ok(agent) = concat!("haze/", env!("CARGO_PKG_VERSION")).parse() {
+        if let Ok(agent) = crate::http::USER_AGENT.parse() {
             request.headers_mut().insert("user-agent", agent);
         }
         let before = started.elapsed();

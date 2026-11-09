@@ -185,6 +185,146 @@ async fn tcp_connect_refused_is_a_reset() {
     assert!(error.backoff_reason().is_some());
 }
 
+type Seen = Arc<std::sync::Mutex<Vec<String>>>;
+
+async fn recording_server(answer: fn(&str) -> &'static str) -> (SocketAddr, Seen, Seen) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let requests: Seen = Arc::default();
+    let closes: Seen = Arc::default();
+    let (r, c) = (requests.clone(), closes.clone());
+    tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let (r, c) = (r.clone(), c.clone());
+            tokio::spawn(async move {
+                let mut buf = [0u8; 4096];
+                let n = stream.read(&mut buf).await.unwrap_or(0);
+                let request = String::from_utf8_lossy(&buf[..n]).to_string();
+                let reply = answer(&request);
+                r.lock().unwrap().push(request);
+                let _ = stream.write_all(reply.as_bytes()).await;
+                let close = loop {
+                    match stream.read(&mut buf).await {
+                        Ok(0) => break "fin".to_string(),
+                        Ok(_) => continue,
+                        Err(e) => break format!("{:?}", e.kind()),
+                    }
+                };
+                c.lock().unwrap().push(close);
+            });
+        }
+    });
+    (address, requests, closes)
+}
+
+async fn settle(seen: &Seen, count: usize) -> Vec<String> {
+    for _ in 0..200 {
+        if seen.lock().unwrap().len() >= count {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    seen.lock().unwrap().clone()
+}
+
+#[tokio::test]
+async fn http_sends_head_with_a_polite_user_agent_and_closes_with_fin() {
+    let (address, requests, closes) =
+        recording_server(|_| "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\n").await;
+    let probe = Http::new(&format!("http://{address}/health"), None, &NO_OPTIONS).unwrap();
+    let reply = probe.probe(0, Duration::from_secs(2)).await.unwrap();
+    assert_eq!(reply.note.as_deref(), Some("HTTP 200"));
+    let requests = settle(&requests, 1).await;
+    assert!(
+        requests[0].starts_with("HEAD /health HTTP/1.1\r\n"),
+        "{requests:?}"
+    );
+    let agent = format!(
+        "User-Agent: haze/{} (+https://github.com/v0l/haze)\r\n",
+        env!("CARGO_PKG_VERSION")
+    );
+    assert!(requests[0].contains(&agent), "{requests:?}");
+    assert_eq!(settle(&closes, 1).await, ["fin"]);
+}
+
+#[tokio::test]
+async fn http_falls_back_to_get_when_head_is_not_allowed() {
+    let (address, requests, closes) = recording_server(|request| {
+        if request.starts_with("HEAD") {
+            "HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\n\r\n"
+        } else {
+            "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"
+        }
+    })
+    .await;
+    let probe = Http::new(&format!("http://{address}/"), None, &NO_OPTIONS).unwrap();
+    probe.probe(0, Duration::from_secs(2)).await.unwrap();
+    probe.probe(1, Duration::from_secs(2)).await.unwrap();
+    let methods: Vec<String> = settle(&requests, 3)
+        .await
+        .iter()
+        .map(|r| r.split(' ').next().unwrap().to_string())
+        .collect();
+    assert_eq!(methods, ["HEAD", "GET", "GET"]);
+    assert_eq!(settle(&closes, 3).await, ["fin", "fin", "fin"]);
+}
+
+#[tokio::test]
+async fn http_uses_the_configured_method() {
+    let (address, requests, _) =
+        recording_server(|_| "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n").await;
+    let probe = Http::new(&format!("http://{address}/"), None, &NO_OPTIONS)
+        .unwrap()
+        .with_method(Some("GET"))
+        .unwrap();
+    probe.probe(0, Duration::from_secs(2)).await.unwrap();
+    assert!(settle(&requests, 1).await[0].starts_with("GET / "));
+    assert!(
+        Http::new("http://x/", None, &NO_OPTIONS)
+            .unwrap()
+            .with_method(Some("DELETE"))
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn tcp_connect_closes_with_fin_even_after_a_banner() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let closes: Seen = Arc::default();
+    let seen = closes.clone();
+    tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let seen = seen.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(30)).await;
+                let _ = stream.write_all(b"SSH-2.0-OpenSSH_9.6\r\n").await;
+                tokio::time::sleep(Duration::from_millis(30)).await;
+                if let Err(e) = stream.write_all(b"more\r\n").await {
+                    seen.lock().unwrap().push(format!("{:?}", e.kind()));
+                    return;
+                }
+                let mut buf = [0u8; 256];
+                let close = loop {
+                    match stream.read(&mut buf).await {
+                        Ok(0) => break "fin".to_string(),
+                        Ok(_) => continue,
+                        Err(e) => break format!("{:?}", e.kind()),
+                    }
+                };
+                seen.lock().unwrap().push(close);
+            });
+        }
+    });
+    let probe = TcpConnect::new(address, &NO_OPTIONS);
+    for seq in 0..3 {
+        probe.probe(seq, Duration::from_secs(1)).await.unwrap();
+    }
+    assert_eq!(settle(&closes, 3).await, ["fin"; 3]);
+}
+
 #[tokio::test]
 async fn http_timing_against_a_slow_local_server() {
     let delay = Duration::from_millis(30);
