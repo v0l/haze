@@ -13,6 +13,7 @@ haze-web.workspace = true
 anyhow.workspace = true
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
 clap.workspace = true
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 tokio.workspace = true
 
 [dev-dependencies]

@@ -1,3 +1,4 @@
+pub mod backoff;
 pub mod config;
 pub mod duration;
 pub mod histogram;

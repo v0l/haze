@@ -53,9 +53,16 @@ pub struct LastStep {
     pub jitter_ms: Option<f64>,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct BackingOff {
+    pub reason: String,
+    pub next_in_ms: u64,
+}
+
 #[derive(Default)]
 struct Live {
     last: Option<LastStep>,
+    backoff: Option<BackingOff>,
     active: BTreeSet<String>,
     sent: u64,
     received: u64,
@@ -235,8 +242,22 @@ impl Hub {
             "target": target,
             "status": self.status(target),
             "last": last,
+            "backoff": self.backoff(target),
         });
         let _ = self.events.send(event.to_string());
+    }
+
+    pub fn backing_off(&self, target: &str, backoff: Option<BackingOff>) {
+        let mut live = self.live.write().unwrap();
+        live.entry(target.to_string()).or_default().backoff = backoff;
+    }
+
+    pub fn backoff(&self, target: &str) -> Option<BackingOff> {
+        self.live
+            .read()
+            .unwrap()
+            .get(target)
+            .and_then(|l| l.backoff.clone())
     }
 
     pub fn alert(&self, target: &str, alert: &str, event: AlertEvent, at_ms: i64) {
@@ -502,5 +523,39 @@ mod tests {
         assert_eq!(hub.status("a"), "refused");
         hub.step_done("a", &step(0));
         assert_eq!(hub.status("a"), "down");
+    }
+
+    #[test]
+    fn backing_off_is_shown_with_its_reason_until_it_clears() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config::parse("[targets.a]\nurl = \"https://example.com/\"").unwrap();
+        let hub = Hub::new(config, dir.path(), 0).unwrap();
+        let mut events = hub.subscribe();
+        let step = Step {
+            start_ms: 1_000,
+            step_ms: 60_000,
+            rtts: vec![None],
+            duplicates: 0,
+            reordered: 0,
+            refused: 1,
+        };
+        hub.backing_off(
+            "a",
+            Some(BackingOff {
+                reason: "HTTP 429".into(),
+                next_in_ms: 120_000,
+            }),
+        );
+        hub.step_done("a", &step);
+        let shown = hub.backoff("a").unwrap();
+        assert_eq!(shown.reason, "HTTP 429");
+        assert_eq!(shown.next_in_ms, 120_000);
+        let event: serde_json::Value = serde_json::from_str(&events.try_recv().unwrap()).unwrap();
+        assert_eq!(event["backoff"]["reason"], "HTTP 429");
+        hub.backing_off("a", None);
+        hub.step_done("a", &step);
+        assert_eq!(hub.backoff("a"), None);
+        let event: serde_json::Value = serde_json::from_str(&events.try_recv().unwrap()).unwrap();
+        assert!(event["backoff"].is_null());
     }
 }

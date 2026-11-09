@@ -97,6 +97,7 @@ struct TargetView {
     status: &'static str,
     active: Vec<String>,
     last: Option<hub::LastStep>,
+    backoff: Option<hub::BackingOff>,
 }
 
 async fn targets(State(app): State<App>) -> impl IntoResponse {
@@ -123,6 +124,7 @@ async fn targets(State(app): State<App>) -> impl IntoResponse {
             status: app.hub.status(&t.path),
             active: app.hub.active(&t.path),
             last: app.hub.last(&t.path),
+            backoff: app.hub.backoff(&t.path),
         })
         .collect();
     axum::Json(serde_json::json!({ "targets": list, "now": now_ms() }))

@@ -3,14 +3,17 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
+use futures_util::StreamExt;
+use futures_util::stream::FuturesUnordered;
+use haze_core::backoff::Backoff;
 use haze_core::duration::format_ms;
-use haze_core::{AlertEvent, AlertState, Config, Step, Summary, smoke_line};
+use haze_core::{AlertEvent, AlertState, Config, Step, Summary, Target, smoke_line};
 use haze_probe::{Sampler, StepDetail, build};
 use haze_store::Store;
 use haze_web::Hub;
 use std::net::SocketAddr;
 use tokio::sync::mpsc;
-use tokio::time::{Instant, MissedTickBehavior};
+use tokio::time::Instant;
 
 use crate::scale_for;
 
@@ -28,6 +31,58 @@ struct Measured {
     target: usize,
     step: Step,
     detail: StepDetail,
+    backing_off: Option<BackingOff>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct BackingOff {
+    pub reason: String,
+    pub next_in: Duration,
+}
+
+pub async fn sample_loop<F, Fut>(
+    target: &Target,
+    sampler: &Sampler,
+    deadline: Option<Instant>,
+    mut done: F,
+) where
+    F: FnMut(Step, StepDetail, Option<BackingOff>) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    let mut backoff = Backoff::new(target.step);
+    let mut next = Instant::now();
+    let mut last_start = next;
+    let mut running = FuturesUnordered::new();
+    loop {
+        if deadline.is_some_and(|d| next >= d) && running.is_empty() {
+            break;
+        }
+        let starting = !deadline.is_some_and(|d| next >= d);
+        tokio::select! {
+            _ = tokio::time::sleep_until(next), if starting => {
+                last_start = Instant::now();
+                running.push(Box::pin(sampler.step(target.pings, target.step, target.timeout)));
+                next = last_start + backoff.interval();
+            }
+            Some((step, detail)) = running.next() => {
+                let pushback = detail
+                    .pushback
+                    .as_ref()
+                    .map(|p| (p.reason.as_str(), p.retry_after));
+                let wait = backoff.observe(pushback);
+                next = if pushback.is_some() {
+                    next.max(last_start + wait)
+                } else {
+                    last_start + wait
+                };
+                let backing_off = backoff.reason().map(|reason| BackingOff {
+                    reason: reason.to_string(),
+                    next_in: next.saturating_duration_since(Instant::now()),
+                });
+                done(step, detail, backing_off).await;
+            }
+        }
+    }
 }
 
 pub struct Evaluator {
@@ -151,30 +206,21 @@ pub async fn run(config: Config, options: Options) -> Result<()> {
                 Some(limiter) => Arc::new(haze_probe::limit::Limited::new(probe, limiter)),
                 None => probe,
             };
-            let sampler = Arc::new(Sampler::new(probe));
-            let mut ticker = tokio::time::interval(target.step);
-            ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
-            let mut running = tokio::task::JoinSet::new();
-            loop {
-                let tick = ticker.tick().await;
-                if deadline.is_some_and(|d| tick >= d) {
-                    break;
-                }
-                let sampler = sampler.clone();
+            let sampler = Sampler::new(probe);
+            sample_loop(&target, &sampler, deadline, |step, detail, backing_off| {
                 let tx = tx.clone();
-                let (pings, step, timeout) = (target.pings, target.step, target.timeout);
-                running.spawn(async move {
-                    let (step, detail) = sampler.step(pings, step, timeout).await;
+                async move {
                     let _ = tx
                         .send(Measured {
                             target: index,
                             step,
                             detail,
+                            backing_off,
                         })
                         .await;
-                });
-            }
-            running.join_all().await;
+                }
+            })
+            .await;
         }));
     }
     drop(tx);
@@ -187,6 +233,16 @@ pub async fn run(config: Config, options: Options) -> Result<()> {
             _ = tokio::signal::ctrl_c() => break,
         };
         let target = &config.targets[measured.target];
+        hub.backing_off(
+            &target.path,
+            measured
+                .backing_off
+                .as_ref()
+                .map(|b| haze_web::hub::BackingOff {
+                    reason: b.reason.clone(),
+                    next_in_ms: b.next_in.as_millis() as u64,
+                }),
+        );
         if let Err(e) = store.append(&target.path, &measured.step) {
             eprintln!("{}: storing the step failed: {e}", target.path);
         }
@@ -213,6 +269,13 @@ pub async fn run(config: Config, options: Options) -> Result<()> {
                 line.push_str(&format!(
                     " [{} errors: {error}]",
                     measured.detail.errors.len()
+                ));
+            }
+            if let Some(b) = &measured.backing_off {
+                line.push_str(&format!(
+                    " [backing off: {}, next step in {}s]",
+                    b.reason,
+                    b.next_in.as_secs()
                 ));
             }
             println!("{line}");
@@ -322,6 +385,90 @@ depends = ["router"]
                 event: AlertEvent::Raised
             }]
         );
+    }
+
+    struct Scripted {
+        answers: std::sync::Mutex<VecDeque<Result<(), haze_core::ProbeError>>>,
+    }
+
+    impl haze_core::Probe for Scripted {
+        fn probe(&self, _seq: u16, _timeout: Duration) -> haze_core::ProbeFuture<'_> {
+            let answer = self.answers.lock().unwrap().pop_front().unwrap_or(Ok(()));
+            Box::pin(async move { answer.map(|_| haze_core::Reply::rtt(Duration::from_millis(1))) })
+        }
+    }
+
+    async fn run_script(
+        step_ms: u64,
+        answers: Vec<Result<(), haze_core::ProbeError>>,
+        steps: usize,
+    ) -> Vec<(Duration, Option<BackingOff>)> {
+        let mut target = Config::parse("[targets.web]\nurl = \"http://127.0.0.1:9/\"")
+            .unwrap()
+            .targets
+            .remove(0);
+        target.step = Duration::from_millis(step_ms);
+        target.timeout = Duration::from_millis(step_ms / 2);
+        let sampler = Sampler::new(Arc::new(Scripted {
+            answers: std::sync::Mutex::new(answers.into()),
+        }));
+        let started = Instant::now();
+        let seen = std::sync::Mutex::new(Vec::new());
+        let deadline = Some(started + Duration::from_millis(step_ms * 40));
+        let run = sample_loop(&target, &sampler, deadline, |_, _, backing_off| {
+            seen.lock().unwrap().push((started.elapsed(), backing_off));
+            async {}
+        });
+        let watch = async {
+            while seen.lock().unwrap().len() < steps {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        };
+        tokio::select! {
+            _ = run => {}
+            _ = watch => {}
+        }
+        seen.into_inner().unwrap()
+    }
+
+    fn refused(status: u16, retry_after: Option<u64>) -> Result<(), haze_core::ProbeError> {
+        Err(haze_core::ProbeError::Refused {
+            status,
+            retry_after: retry_after.map(Duration::from_secs),
+        })
+    }
+
+    #[tokio::test]
+    async fn refusals_double_the_step_and_three_clean_steps_reset_it() {
+        let seen = run_script(100, vec![refused(429, None), refused(429, None)], 7).await;
+        let at: Vec<u128> = seen.iter().map(|(t, _)| t.as_millis()).collect();
+        let gaps: Vec<u128> = at.windows(2).map(|w| w[1] - w[0]).collect();
+        let expect = [200, 400, 400, 400, 100, 100];
+        for (gap, want) in gaps.iter().zip(expect) {
+            assert!(
+                *gap + 20 >= want && *gap < want + 150,
+                "gaps {gaps:?}, want {expect:?}"
+            );
+        }
+        assert_eq!(seen[0].1.as_ref().unwrap().reason, "HTTP 429");
+        assert!(
+            seen[3].1.is_some(),
+            "still backing off after two clean steps"
+        );
+        assert_eq!(seen[4].1, None, "reset after three clean steps");
+    }
+
+    #[tokio::test]
+    async fn retry_after_sets_the_next_step() {
+        let seen = run_script(100, vec![refused(503, Some(1))], 2).await;
+        let gap = seen[1].0 - seen[0].0;
+        assert!(
+            gap >= Duration::from_millis(980) && gap < Duration::from_millis(1300),
+            "{gap:?}"
+        );
+        let first = seen[0].1.as_ref().unwrap();
+        assert_eq!(first.reason, "HTTP 503");
+        assert!(first.next_in > Duration::from_millis(800), "{first:?}");
     }
 
     #[test]
