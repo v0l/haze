@@ -90,6 +90,7 @@ pub async fn build(target: &Target) -> Result<Arc<dyn Probe>, String> {
 pub struct Sampler {
     probe: Arc<dyn Probe>,
     next_seq: AtomicU16,
+    jitter: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -111,7 +112,13 @@ impl Sampler {
         Sampler {
             probe,
             next_seq: AtomicU16::new(0),
+            jitter: false,
         }
+    }
+
+    pub fn jittered(mut self, jitter: bool) -> Sampler {
+        self.jitter = jitter;
+        self
     }
 
     pub async fn step(
@@ -131,7 +138,12 @@ impl Sampler {
         for index in 0..pings {
             let seq = self.next_seq.fetch_add(1, Ordering::Relaxed);
             let probe = self.probe.clone();
-            let at = started + gap * index;
+            let jitter = if self.jitter {
+                gap.mul_f64((correlate::random_u64() >> 11) as f64 / (1u64 << 53) as f64)
+            } else {
+                Duration::ZERO
+            };
+            let at = started + gap * index + jitter;
             tasks.spawn(async move {
                 tokio::time::sleep_until(at.into()).await;
                 let sent = started.elapsed();

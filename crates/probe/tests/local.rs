@@ -435,6 +435,42 @@ async fn a_tls_alert_is_a_reset() {
 }
 
 #[tokio::test]
+async fn jittered_pings_stay_in_their_slots_and_vary() {
+    let starts: Arc<std::sync::Mutex<Vec<std::time::Instant>>> = Arc::default();
+    struct Stamp(Arc<std::sync::Mutex<Vec<std::time::Instant>>>);
+    impl Probe for Stamp {
+        fn probe(&self, _seq: u16, _timeout: Duration) -> haze_core::ProbeFuture<'_> {
+            self.0.lock().unwrap().push(std::time::Instant::now());
+            Box::pin(async { Ok(haze_core::Reply::rtt(Duration::from_millis(1))) })
+        }
+    }
+    let mut offsets = Vec::new();
+    for _ in 0..4 {
+        starts.lock().unwrap().clear();
+        let sampler = Sampler::new(Arc::new(Stamp(starts.clone()))).jittered(true);
+        let began = std::time::Instant::now();
+        sampler
+            .step(4, Duration::from_millis(400), Duration::from_millis(50))
+            .await;
+        let mut at: Vec<Duration> = starts.lock().unwrap().iter().map(|s| *s - began).collect();
+        at.sort();
+        for (slot, t) in at.iter().enumerate() {
+            let from = Duration::from_millis(100 * slot as u64);
+            assert!(
+                *t >= from && *t < from + Duration::from_millis(100) + SCHEDULER_STALL_ALLOWANCE,
+                "slot {slot} at {t:?}: {at:?}"
+            );
+        }
+        offsets.push(at[0]);
+    }
+    offsets.sort();
+    assert!(
+        offsets[3] - offsets[0] > Duration::from_millis(5),
+        "no jitter across steps: {offsets:?}"
+    );
+}
+
+#[tokio::test]
 async fn pings_are_spread_across_the_interval() {
     let server = udp_echo(Ipv4Addr::LOCALHOST.into(), Duration::ZERO, 1).await;
     let probe = Arc::new(UdpEcho::new(server, 32, &NO_OPTIONS).await.unwrap());

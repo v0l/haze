@@ -206,7 +206,7 @@ pub async fn run(config: Config, options: Options) -> Result<()> {
                 Some(limiter) => Arc::new(haze_probe::limit::Limited::new(probe, limiter)),
                 None => probe,
             };
-            let sampler = Sampler::new(probe);
+            let sampler = Sampler::new(probe).jittered(target.probe.opens_connections());
             sample_loop(&target, &sampler, deadline, |step, detail, backing_off| {
                 let tx = tx.clone();
                 async move {
