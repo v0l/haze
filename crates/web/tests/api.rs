@@ -334,6 +334,149 @@ async fn the_dashboard_and_its_assets_are_embedded() {
 }
 
 #[tokio::test]
+async fn public_mode_leaves_private_addresses_out_of_every_route() {
+    let dir = tempfile::tempdir().unwrap();
+    let text = |show: &str| {
+        format!(
+            r#"
+[storage]
+dir = "{}"
+
+[web]
+show_addresses = "{show}"
+
+[alerts.loss]
+when = "loss >= 50% for 2 steps"
+
+[targets.mgmt]
+alerts = ["loss"]
+
+[targets.mgmt.pve]
+host = "10.97.0.5"
+
+[targets.mgmt.k8s]
+url = "https://10.97.0.31:6443/healthz"
+
+[targets.mgmt.ula]
+host = "fd97::6"
+
+[targets.mgmt.cgnat]
+host = "100.64.1.2"
+
+[targets.mgmt.self]
+host = "localhost"
+
+[targets.upstream.cloudflare]
+host = "1.1.1.1"
+
+[targets.upstream.cloudflare6]
+host = "2606:4700:4700::1111"
+"#,
+            dir.path().display()
+        )
+    };
+    let private = [
+        "10.97.0.5",
+        "10.97.0.31",
+        "fd97::6",
+        "100.64.1.2",
+        "localhost",
+    ];
+    let paths = [
+        "mgmt/pve",
+        "mgmt/k8s",
+        "mgmt/ula",
+        "mgmt/cgnat",
+        "mgmt/self",
+        "upstream/cloudflare",
+        "upstream/cloudflare6",
+    ];
+    let now = haze_web::now_ms();
+    {
+        let mut store = Store::open(dir.path()).unwrap();
+        for path in paths {
+            store.append(path, &step(now - 120_000, 5, 0)).unwrap();
+        }
+    }
+
+    let all = Config::parse(&text("all")).unwrap();
+    let hub = Arc::new(Hub::new(all, dir.path(), now).unwrap());
+    let app = router(hub).unwrap();
+    let (_, _, body) = get(&app, "/api/targets").await;
+    let body = String::from_utf8(body).unwrap();
+    for address in private {
+        assert!(body.contains(address), "{address} is shown in all mode");
+    }
+
+    let public = Config::parse(&text("public")).unwrap();
+    let hub = Arc::new(Hub::new(public, dir.path(), now).unwrap());
+    let app = router(hub.clone()).unwrap();
+    hub.alert("mgmt/pve", "loss", AlertEvent::Raised, now - 60_000);
+
+    let mut uris = vec![
+        "/".to_string(),
+        "/icon.svg".to_string(),
+        "/api/targets".to_string(),
+        "/api/alerts".to_string(),
+        "/api/alerts?target=mgmt/pve".to_string(),
+        "/metrics".to_string(),
+        format!("/api/compare/graph.svg?targets={}", paths[..6].join(",")),
+    ];
+    for path in paths {
+        uris.push(format!("/api/series/{path}"));
+        uris.push(format!("/api/graph/{path}.svg"));
+    }
+    for uri in &uris {
+        let (status, _, body) = get(&app, uri).await;
+        assert_eq!(status, StatusCode::OK, "{uri}");
+        let body = String::from_utf8_lossy(&body);
+        for address in private {
+            assert!(!body.contains(address), "{uri} shows {address}");
+        }
+    }
+
+    let data = get_json(&app, "/api/targets").await;
+    let list = data["targets"].as_array().unwrap();
+    for t in &list[..5] {
+        assert!(t.get("address").is_none(), "{t}");
+        assert!(t["path"].as_str().unwrap().starts_with("mgmt/"));
+    }
+    assert_eq!(list[5]["address"], "1.1.1.1");
+    assert_eq!(list[6]["address"], "2606:4700:4700::1111");
+
+    let response = app
+        .clone()
+        .oneshot(Request::get("/api/events").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let mut body = response.into_body();
+    let mut seen = String::new();
+    let read = async {
+        let mut sent = false;
+        while let Some(frame) = body.frame().await {
+            if let Ok(data) = frame.unwrap().into_data() {
+                seen.push_str(&String::from_utf8_lossy(&data));
+            }
+            if !sent && seen.contains("event: hello") {
+                hub.step_done("mgmt/pve", &step(now, 5, 0));
+                hub.alert("mgmt/pve", "loss", AlertEvent::Cleared, now);
+                sent = true;
+            }
+            if seen.contains("\"kind\":\"step\"") && seen.contains("\"kind\":\"alert\"") {
+                break;
+            }
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(5), read)
+        .await
+        .expect("a step and an alert within 5 s");
+    assert!(seen.contains("\"target\":\"mgmt/pve\""));
+    for address in private {
+        assert!(!seen.contains(address), "/api/events shows {address}");
+    }
+}
+
+#[tokio::test]
 async fn events_stream_completed_steps() {
     let f = fixture();
     let response = f

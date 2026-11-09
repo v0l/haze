@@ -127,6 +127,7 @@ fn main() -> Result<()> {
                 event,
                 method: None,
                 allow_aggressive: true,
+                hide_address: false,
                 probe: kind,
                 step: (interval * count).max(MIN_STEP),
                 pings: count,

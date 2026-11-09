@@ -76,7 +76,34 @@ The API it uses is open for scripts and embedding:
 | `/metrics` | OpenMetrics: pings sent and received, an RTT histogram, last step loss and quantiles, active alerts |
 
 Times are Unix milliseconds. The dashboard listens on localhost by default and has no login; put
-it behind a reverse proxy with authentication before exposing it.
+it behind a reverse proxy with authentication before exposing it, or read "Public dashboards"
+below.
+
+## Public dashboards
+
+Every target's host or url is shown on the dashboard and in `/api/targets`. To publish a
+dashboard without giving away your internal addressing, set
+
+```toml
+[web]
+show_addresses = "public"
+```
+
+| `show_addresses` | Shown |
+| --- | --- |
+| `all` (default) | Every address |
+| `public` | Only addresses outside private (10/8, 172.16/12, 192.168/16), loopback, link-local, CGNAT (100.64/10), ULA (fc00::/7) and the like. A hostname is hidden when every address it resolves to is private, or when it does not resolve. A url is judged by its host |
+| `none` | No address |
+
+A target or group can also set `hide_address = true`, which its children inherit, to hide one
+address whatever the global setting. Hostnames are resolved once when haze starts.
+
+A hidden address is left out of `/api/targets` (no `address` field) and the dashboard shows
+just the probe. Paths and titles are always shown, so name targets with that in mind. Nothing
+else the web server sends carries an address: series, graphs, `/api/alerts`, `/api/events` and
+`/metrics` are keyed by target path. Webhook and ntfy notifications carry the path too, never
+the address, so they need no setting. `haze check` still prints every address, since only the
+operator runs it.
 
 ## Config
 
@@ -151,7 +178,8 @@ probe = "smtp"
 
 Per target settings: `probe` (`icmp`, `tcp`, `udp`, `http`, `nostr`, `dns`, `smtp`), `step` (at
 least 5 s), `pings` (1 to 20), `timeout`, `family` (4 or 6), `source`, `size`, `tos`, `port`,
-`method` (`HEAD` or `GET` for http), `allow_aggressive`, `tags`, `alerts`, `depends`. A `url`
+`method` (`HEAD` or `GET` for http), `allow_aggressive`, `hide_address`, `tags`, `alerts`,
+`depends`. A `url`
 starting with `https://` or `http://` picks the http probe and one starting with `wss://` or
 `ws://` the nostr probe.
 

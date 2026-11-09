@@ -1,6 +1,7 @@
 pub mod graph;
 pub mod hub;
 
+use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -30,6 +31,7 @@ static ICON: &str = include_str!("../ui/src/icon.svg");
 pub struct App {
     hub: Arc<Hub>,
     store: Arc<Store>,
+    addresses: Arc<BTreeMap<String, String>>,
 }
 
 pub fn now_ms() -> i64 {
@@ -41,7 +43,20 @@ pub fn now_ms() -> i64 {
 
 pub fn router(hub: Arc<Hub>) -> std::io::Result<Router> {
     let store = Arc::new(Store::open(hub.config().storage_dir.clone())?);
-    let app = App { hub, store };
+    let config = hub.config();
+    let addresses = config
+        .targets
+        .iter()
+        .filter_map(|t| {
+            let shown = config.shown_address(t, haze_core::address::resolve_system)?;
+            Some((t.path.clone(), shown))
+        })
+        .collect();
+    let app = App {
+        hub,
+        store,
+        addresses: Arc::new(addresses),
+    };
     Ok(Router::new()
         .route(
             "/",
@@ -88,7 +103,8 @@ struct TargetView {
     path: String,
     title: Option<String>,
     probe: String,
-    address: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    address: Option<String>,
     tags: Vec<String>,
     alerts: Vec<String>,
     depends: Vec<String>,
@@ -110,12 +126,7 @@ async fn targets(State(app): State<App>) -> impl IntoResponse {
             path: t.path.clone(),
             title: t.title.clone(),
             probe: t.probe.name().to_string(),
-            address: match (&t.url, &t.host, t.port) {
-                (Some(url), _, _) => url.clone(),
-                (None, Some(host), Some(port)) => format!("{host}:{port}"),
-                (None, Some(host), None) => host.clone(),
-                _ => String::new(),
-            },
+            address: app.addresses.get(&t.path).cloned(),
             tags: t.tags.clone(),
             alerts: t.alerts.clone(),
             depends: t.depends.clone(),

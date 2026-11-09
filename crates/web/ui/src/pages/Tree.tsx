@@ -2,7 +2,7 @@ import { Graph } from "../components/Graph";
 import { RangeBar } from "../components/RangeBar";
 import { BackoffNote } from "../components/Tables";
 import { StatusDot, SummaryPills, TagChips, worst } from "../components/bits";
-import { fmt, pct } from "../format";
+import { fmt, pct, probeLabel } from "../format";
 import { useDash } from "../state";
 import type { Status, TargetView } from "../types";
 
@@ -47,7 +47,7 @@ function Row({ t, tag }: { t: TargetView; tag: string | null }) {
       >
         <StatusDot status={t.status} />
         <span class="label">{t.path.split("/").pop()}</span>
-        <span class="muted small address">{`${t.probe} ${t.address}`}</span>
+        <span class="muted small address">{probeLabel(t)}</span>
         <BackoffNote backoff={t.backoff} short />
       </a>
       <span class="tags">

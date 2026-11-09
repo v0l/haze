@@ -23,6 +23,7 @@ pub struct Settings {
     pub event: Option<String>,
     pub method: Option<String>,
     pub allow_aggressive: Option<bool>,
+    pub hide_address: Option<bool>,
 }
 
 impl Settings {
@@ -42,6 +43,7 @@ impl Settings {
             event: self.event.clone().or_else(|| parent.event.clone()),
             method: self.method.clone().or_else(|| parent.method.clone()),
             allow_aggressive: self.allow_aggressive.or(parent.allow_aggressive),
+            hide_address: self.hide_address.or(parent.hide_address),
         }
     }
 }
@@ -66,6 +68,28 @@ pub struct Storage {
 #[serde(deny_unknown_fields)]
 pub struct Web {
     pub listen: Option<String>,
+    pub show_addresses: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ShowAddresses {
+    #[default]
+    All,
+    Public,
+    None,
+}
+
+impl ShowAddresses {
+    pub fn parse(text: &str) -> Result<Self, String> {
+        match text {
+            "all" => Ok(ShowAddresses::All),
+            "public" => Ok(ShowAddresses::Public),
+            "none" => Ok(ShowAddresses::None),
+            other => Err(format!(
+                "[web] show_addresses `{other}` is not all, public or none"
+            )),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -179,6 +203,7 @@ pub struct Target {
     pub event: Option<String>,
     pub method: Option<String>,
     pub allow_aggressive: bool,
+    pub hide_address: bool,
     pub tags: Vec<String>,
     pub alerts: Vec<String>,
     pub depends: Vec<String>,
@@ -220,6 +245,18 @@ impl Target {
         }
     }
 
+    pub fn address(&self) -> Option<String> {
+        match (&self.url, &self.host, self.port) {
+            (Some(url), _, _) => Some(url.clone()),
+            (None, Some(host), Some(port)) if host.contains(':') => {
+                Some(format!("[{host}]:{port}"))
+            }
+            (None, Some(host), Some(port)) => Some(format!("{host}:{port}")),
+            (None, Some(host), None) => Some(host.clone()),
+            _ => None,
+        }
+    }
+
     pub fn per_minute(&self) -> f64 {
         self.pings as f64 * 60.0 / self.step.as_secs_f64()
     }
@@ -230,6 +267,7 @@ pub struct Config {
     pub storage_dir: String,
     pub retention_days: u32,
     pub listen: Option<String>,
+    pub show_addresses: ShowAddresses,
     pub notify: Vec<NotifyRoute>,
     pub alerts: BTreeMap<String, Alert>,
     pub targets: Vec<Target>,
@@ -338,10 +376,18 @@ impl Config {
                 return Err(format!("notify url `{}` is not http or https", route.url));
             }
         }
+        let show_addresses = raw
+            .web
+            .as_ref()
+            .and_then(|w| w.show_addresses.as_deref())
+            .map(ShowAddresses::parse)
+            .transpose()?
+            .unwrap_or_default();
         Ok(Config {
             storage_dir: storage.dir,
             retention_days: storage.retention_days.unwrap_or(400),
             listen: raw.web.and_then(|w| w.listen),
+            show_addresses,
             notify: raw.notify,
             alerts,
             targets,
@@ -350,6 +396,27 @@ impl Config {
 
     pub fn target(&self, path: &str) -> Option<&Target> {
         self.targets.iter().find(|t| t.path == path)
+    }
+
+    pub fn shown_address<R>(&self, target: &Target, resolve: R) -> Option<String>
+    where
+        R: FnOnce(&str) -> Option<Vec<std::net::IpAddr>>,
+    {
+        if target.hide_address {
+            return None;
+        }
+        let address = target.address()?;
+        match self.show_addresses {
+            ShowAddresses::All => Some(address),
+            ShowAddresses::None => None,
+            ShowAddresses::Public => {
+                let host = match &target.url {
+                    Some(url) => crate::address::url_host(url),
+                    None => target.host.as_deref().unwrap_or_default(),
+                };
+                (!crate::address::host_is_private(host, resolve)).then_some(address)
+            }
+        }
     }
 
     pub fn warnings(&self) -> Vec<String> {
@@ -372,7 +439,7 @@ impl Config {
     }
 }
 
-const NODE_KEYS: [&str; 20] = [
+const NODE_KEYS: [&str; 21] = [
     "title",
     "host",
     "url",
@@ -393,6 +460,7 @@ const NODE_KEYS: [&str; 20] = [
     "event",
     "method",
     "allow_aggressive",
+    "hide_address",
 ];
 
 fn check_politeness(targets: &[Target]) -> Result<(), String> {
@@ -581,6 +649,7 @@ fn resolve(path: String, node: Node, inherited: Inherited) -> Result<Target, Str
         event: s.event.map(|e| e.to_ascii_lowercase()),
         method: s.method.map(|m| m.to_ascii_uppercase()),
         allow_aggressive: s.allow_aggressive.unwrap_or(false),
+        hide_address: s.hide_address.unwrap_or(false),
         tags: inherited.tags,
         alerts: inherited.alerts,
         depends: inherited.depends,
@@ -695,6 +764,89 @@ port = 22
 
     fn error_of(text: &str) -> String {
         Config::parse(text).expect_err("should not parse")
+    }
+
+    #[test]
+    fn shown_addresses_follow_web_show_addresses_and_hide_address() {
+        let text = |show: &str| {
+            format!(
+                r#"
+{show}
+[targets.mgmt]
+hide_address = false
+[targets.mgmt.pve]
+host = "10.97.0.5"
+[targets.mgmt.k8s]
+url = "https://10.97.0.31:6443/"
+[targets.mgmt.v6]
+host = "fd97::5"
+probe = "tcp"
+port = 22
+allow_aggressive = true
+[targets.public]
+[targets.public.one]
+host = "1.1.1.1"
+[targets.public.site]
+url = "https://example.com/"
+[targets.secret]
+hide_address = true
+[targets.secret.box]
+host = "8.8.8.8"
+[targets.secret.shown]
+host = "9.9.9.9"
+hide_address = false
+"#
+            )
+        };
+        let resolve = |host: &str| match host {
+            "example.com" => Some(vec!["93.184.215.14".parse().unwrap()]),
+            _ => None,
+        };
+        let shown = |config: &Config| -> Vec<Option<String>> {
+            config
+                .targets
+                .iter()
+                .map(|t| config.shown_address(t, resolve))
+                .collect()
+        };
+        let s = |v: &str| Some(v.to_string());
+
+        let all = Config::parse(&text("")).unwrap();
+        assert_eq!(all.show_addresses, ShowAddresses::All);
+        assert_eq!(
+            shown(&all),
+            [
+                s("10.97.0.5"),
+                s("https://10.97.0.31:6443/"),
+                s("[fd97::5]:22"),
+                s("1.1.1.1"),
+                s("https://example.com/"),
+                None,
+                s("9.9.9.9"),
+            ]
+        );
+
+        let public = Config::parse(&text("[web]\nshow_addresses = \"public\"")).unwrap();
+        assert_eq!(
+            shown(&public),
+            [
+                None,
+                None,
+                None,
+                s("1.1.1.1"),
+                s("https://example.com/"),
+                None,
+                s("9.9.9.9"),
+            ]
+        );
+
+        let none = Config::parse(&text("[web]\nshow_addresses = \"none\"")).unwrap();
+        assert!(shown(&none).iter().all(Option::is_none));
+
+        assert!(
+            error_of("[web]\nshow_addresses = \"some\"\n[targets.a]\nhost = \"1.1.1.1\"")
+                .contains("show_addresses")
+        );
     }
 
     #[test]

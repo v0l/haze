@@ -22,7 +22,7 @@ export interface TargetView {
   path: string;
   title: string | null;
   probe: string;
-  address: string;
+  address?: string;
   tags: string[];
   alerts: string[];
   depends: string[];

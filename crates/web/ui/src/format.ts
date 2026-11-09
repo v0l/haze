@@ -6,6 +6,9 @@ export const fmt = (v: number | null | undefined): string =>
 export const pct = (v: number | null | undefined): string =>
   v === null || v === undefined ? "-" : `${(v * 100).toFixed(v > 0 && v < 0.1 ? 1 : 0)}%`;
 
+export const probeLabel = (t: { probe: string; address?: string }): string =>
+  t.address ? `${t.probe} ${t.address}` : t.probe;
+
 const pad = (n: number) => String(n).padStart(2, "0");
 
 export function stamp(ms: number, withDate = true): string {

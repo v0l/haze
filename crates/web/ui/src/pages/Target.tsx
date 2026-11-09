@@ -4,6 +4,7 @@ import { Graph } from "../components/Graph";
 import { RangeBar } from "../components/RangeBar";
 import { BackoffNote, IncidentTable, LastStepTable } from "../components/Tables";
 import { Card, StatusDot, TagChips } from "../components/bits";
+import { probeLabel } from "../format";
 import { shareLink } from "../route";
 import { useDash } from "../state";
 import type { Incident } from "../types";
@@ -61,7 +62,7 @@ export function TargetPage({ path }: { path: string }) {
         </h1>
         <div class="muted small">
           {t.title ? `${t.title}, ` : ""}
-          {`${t.probe} ${t.address}, ${t.pings} pings every ${Math.round(t.step_ms / 1000)}s`}
+          {`${probeLabel(t)}, ${t.pings} pings every ${Math.round(t.step_ms / 1000)}s`}
         </div>
         <div class="tags">
           <TagChips tags={t.tags} active={null} />
