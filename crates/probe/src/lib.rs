@@ -3,6 +3,7 @@ pub mod dns;
 pub mod http;
 #[cfg(unix)]
 pub mod icmp;
+pub mod limit;
 pub mod net;
 pub mod nostr;
 pub mod tcp;

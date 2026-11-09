@@ -130,8 +130,10 @@ pub async fn run(config: Config, options: Options) -> Result<()> {
         .max()
         .unwrap_or(0);
     let mut workers = Vec::new();
+    let limiters = haze_probe::limit::limiters(&config.targets);
     for (index, target) in config.targets.iter().cloned().enumerate() {
         let tx = tx.clone();
+        let limiter = limiters.get(&target.destination()).cloned();
         workers.push(tokio::spawn(async move {
             let probe = loop {
                 match build(&target).await {
@@ -144,6 +146,10 @@ pub async fn run(config: Config, options: Options) -> Result<()> {
                         tokio::time::sleep(RETRY).await;
                     }
                 }
+            };
+            let probe: Arc<dyn haze_core::Probe> = match limiter {
+                Some(limiter) => Arc::new(haze_probe::limit::Limited::new(probe, limiter)),
+                None => probe,
             };
             let sampler = Arc::new(Sampler::new(probe));
             let mut ticker = tokio::time::interval(target.step);
