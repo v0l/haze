@@ -157,6 +157,7 @@ h2 { font-size: 15px; margin: 0 0 10px; color: var(--muted); font-weight: 600; }
 .row .name { display: flex; align-items: center; gap: 8px; color: var(--text); min-width: 0; }
 .row .label { font-weight: 600; }
 .row .address { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .backoff { flex: none; }
 .row .stat { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 .graph { position: relative; width: 100%; touch-action: pan-y; cursor: grab; user-select: none; overflow: hidden; border-radius: 6px; }

@@ -6,9 +6,13 @@ export function backoffText(b: BackingOff): string {
   return `backing off: ${b.reason}, next step in ${duration(b.next_in_ms)}`;
 }
 
-export function BackoffNote({ backoff }: { backoff: BackingOff | null }) {
+export function BackoffNote({ backoff, short = false }: { backoff: BackingOff | null; short?: boolean }) {
   if (!backoff) return null;
-  return <span class="backoff small">{backoffText(backoff)}</span>;
+  return (
+    <span class="backoff small" title={backoffText(backoff)}>
+      {short ? "backing off" : backoffText(backoff)}
+    </span>
+  );
 }
 
 export function LastStepTable({ last }: { last: LastStep | null }) {

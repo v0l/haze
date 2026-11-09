@@ -48,7 +48,7 @@ function Row({ t, tag }: { t: TargetView; tag: string | null }) {
         <StatusDot status={t.status} />
         <span class="label">{t.path.split("/").pop()}</span>
         <span class="muted small address">{`${t.probe} ${t.address}`}</span>
-        <BackoffNote backoff={t.backoff} />
+        <BackoffNote backoff={t.backoff} short />
       </a>
       <span class="tags">
         <TagChips tags={t.tags} active={tag} />
