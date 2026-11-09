@@ -9,7 +9,7 @@ use tokio::io::unix::AsyncFd;
 use tokio::task::JoinHandle;
 
 use crate::correlate::{Arrival, Correlator, random_u64};
-use crate::net::{SocketOptions, datagram, recv_stamped};
+use crate::net::{SocketOptions, datagram, raw, recv_stamped};
 
 const ECHO_REQUEST_V4: u8 = 8;
 const ECHO_REPLY_V4: u8 = 0;
@@ -93,15 +93,87 @@ pub fn unprivileged_ping_allowed() -> Result<(), String> {
         Some(Protocol::ICMPV4),
     ) {
         Ok(_) => Ok(()),
-        Err(e) => {
-            let range = std::fs::read_to_string("/proc/sys/net/ipv4/ping_group_range")
-                .map(|r| r.split_whitespace().collect::<Vec<_>>().join(" "))
-                .unwrap_or_else(|_| "unknown".into());
-            Err(format!(
-                "unprivileged ICMP sockets are not allowed ({e}); net.ipv4.ping_group_range is `{range}`, set it to include your group, for example `sysctl net.ipv4.ping_group_range=\"0 2147483647\"`"
-            ))
-        }
+        Err(e) => Err(neither_allowed(&e, &ping_group_range(), current_gid())),
     }
+}
+
+fn ping_group_range() -> String {
+    std::fs::read_to_string("/proc/sys/net/ipv4/ping_group_range")
+        .map(|r| r.split_whitespace().collect::<Vec<_>>().join(" "))
+        .unwrap_or_else(|_| "unknown".into())
+}
+
+fn current_gid() -> u32 {
+    unsafe { libc::getegid() }
+}
+
+pub fn neither_allowed(error: &io::Error, range: &str, gid: u32) -> String {
+    format!(
+        "ICMP needs unprivileged ping sockets or CAP_NET_RAW and this process has neither ({error}): \
+         net.ipv4.ping_group_range is `{range}`, which leaves out group {gid}, and raw sockets are refused. \
+         Fix one: in Docker pass `--sysctl net.ipv4.ping_group_range=\"0 2147483647\"` or `--cap-add NET_RAW`; \
+         on a host run `sysctl net.ipv4.ping_group_range=\"0 2147483647\"` or `setcap cap_net_raw=p` on the binary"
+    )
+}
+
+fn open(target: IpAddr, protocol: Protocol, options: &SocketOptions) -> io::Result<Socket> {
+    let denied = match datagram(target, Some(protocol), options) {
+        Ok(socket) => return Ok(socket),
+        Err(e) if e.kind() == io::ErrorKind::PermissionDenied => e,
+        Err(e) => return Err(e),
+    };
+    let raw_socket = || raw(target, protocol, options);
+    match raw_socket().or_else(|e| {
+        if raise_net_raw() {
+            raw_socket()
+        } else {
+            Err(e)
+        }
+    }) {
+        Ok(socket) => Ok(socket),
+        Err(_) => Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            neither_allowed(&denied, &ping_group_range(), current_gid()),
+        )),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn raise_net_raw() -> bool {
+    #[repr(C)]
+    struct Header {
+        version: u32,
+        pid: libc::c_int,
+    }
+    #[repr(C)]
+    #[derive(Clone, Copy, Default)]
+    struct Data {
+        effective: u32,
+        permitted: u32,
+        inheritable: u32,
+    }
+    const VERSION_3: u32 = 0x2008_0522;
+    const NET_RAW: u32 = 1 << 13;
+    let mut header = Header {
+        version: VERSION_3,
+        pid: 0,
+    };
+    let mut data = [Data::default(); 2];
+    unsafe {
+        if libc::syscall(libc::SYS_capget, &mut header, data.as_mut_ptr()) != 0 {
+            return false;
+        }
+        if data[0].permitted & NET_RAW == 0 {
+            return false;
+        }
+        data[0].effective |= NET_RAW;
+        libc::syscall(libc::SYS_capset, &mut header, data.as_ptr()) == 0
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn raise_net_raw() -> bool {
+    false
 }
 
 impl Icmp {
@@ -112,16 +184,7 @@ impl Icmp {
         } else {
             Protocol::ICMPV4
         };
-        let socket = datagram(target, Some(protocol), options).map_err(|e| {
-            if e.kind() == io::ErrorKind::PermissionDenied {
-                io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    unprivileged_ping_allowed().err().unwrap_or(e.to_string()),
-                )
-            } else {
-                e
-            }
-        })?;
+        let socket = open(target, protocol, options)?;
         let socket = Arc::new(unsafe { AsyncFd::register(socket) }.map_err(|e| e.into_parts().1)?);
         let token = random_u64().to_be_bytes();
         let correlator = Arc::new(Correlator::default());
@@ -200,6 +263,19 @@ impl Probe for Icmp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_refusal_names_both_docker_flags_and_the_range() {
+        let error = io::Error::from_raw_os_error(libc::EACCES);
+        let message = neither_allowed(&error, "1 0", 65532);
+        assert!(message.contains("`1 0`"), "{message}");
+        assert!(message.contains("group 65532"), "{message}");
+        assert!(
+            message.contains("--sysctl net.ipv4.ping_group_range=\"0 2147483647\""),
+            "{message}"
+        );
+        assert!(message.contains("--cap-add NET_RAW"), "{message}");
+    }
 
     #[test]
     fn checksum_of_a_request_verifies_to_zero() {

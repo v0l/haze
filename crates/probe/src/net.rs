@@ -14,12 +14,25 @@ pub fn datagram(
     protocol: Option<Protocol>,
     options: &SocketOptions,
 ) -> io::Result<Socket> {
+    open(target, Type::DGRAM, protocol, options)
+}
+
+pub fn raw(target: IpAddr, protocol: Protocol, options: &SocketOptions) -> io::Result<Socket> {
+    open(target, Type::RAW, Some(protocol), options)
+}
+
+fn open(
+    target: IpAddr,
+    kind: Type,
+    protocol: Option<Protocol>,
+    options: &SocketOptions,
+) -> io::Result<Socket> {
     let domain = if target.is_ipv4() {
         Domain::IPV4
     } else {
         Domain::IPV6
     };
-    let socket = Socket::new(domain, Type::DGRAM, protocol)?;
+    let socket = Socket::new(domain, kind, protocol)?;
     prepare(&socket, target, options)?;
     enable_timestamps(&socket);
     Ok(socket)
