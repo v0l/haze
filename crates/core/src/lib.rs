@@ -1,3 +1,4 @@
+pub mod address;
 pub mod backoff;
 pub mod config;
 pub mod duration;
