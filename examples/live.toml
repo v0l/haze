@@ -1,0 +1,54 @@
+[defaults]
+step = "15s"
+pings = 10
+timeout = "2s"
+
+[storage]
+dir = "demo-data"
+
+[web]
+listen = "127.0.0.1:8480"
+
+[alerts.loss]
+when = "loss >= 10% for 3 steps"
+comment = "sustained packet loss"
+
+[alerts.slow]
+when = "median > 2x baseline 3 of 5"
+baseline_steps = 60
+
+[alerts.smoky]
+when = "smoke > 1ms 2 of 3"
+comment = "the spread between p10 and p90 is over 1 ms"
+
+[targets.dns]
+tags = ["dns", "anycast"]
+alerts = ["loss", "slow", "smoky"]
+
+[targets.dns.cloudflare]
+host = "1.1.1.1"
+
+[targets.dns.google]
+host = "8.8.8.8"
+
+[targets.dns.lookup]
+title = "example.com A record from 1.1.1.1"
+probe = "dns"
+host = "1.1.1.1"
+name = "example.com"
+pings = 5
+
+[targets.nostr.noslol]
+title = "nos.lol REQ to EOSE"
+url = "wss://nos.lol"
+pings = 3
+timeout = "5s"
+tags = ["nostr"]
+alerts = ["loss"]
+
+[targets.web.example]
+url = "https://example.com/"
+pings = 3
+timeout = "5s"
+tags = ["web"]
+alerts = ["loss"]
