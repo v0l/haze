@@ -21,6 +21,13 @@ All notable changes to haze are listed here. The format follows
 - A multi-arch Docker image at `ghcr.io/v0l/haze` (linux/amd64, linux/arm64), non-root on
   `scratch`, with an ICMP raw socket fallback under `CAP_NET_RAW` and a Compose example.
 - Webhook and ntfy notifications, filtered by tag.
+- Polite connection probes: per probe default rates (1 a minute for http, nostr and smtp, 3 for
+  tcp, 5 for dns), a cap of 6 connections a minute per host unless `allow_aggressive` is set,
+  one shared limiter per host and port, backoff on 429, 503, resets and TLS alerts that honours
+  `Retry-After` and shows on the dashboard, HEAD requests with a GET fallback, FIN on close and
+  jittered timing.
+- An smtp probe that reads the banner and says `QUIT`, and a `haze check` warning for bare tcp
+  probes to ports 22, 25 and 587.
 - A web dashboard served by `haze run` on 127.0.0.1:8480: the target tree with tags and status
   dots, a target page with the smoke graph, ranges from 3 hours to 400 days, pan and zoom on one
   time axis, hover readouts, compare for up to 6 targets, incidents, light and dark themes and a

@@ -46,9 +46,13 @@ receive path and timestamps. The ICMP code needed is about 200 lines.
   sockets (with `CAP_NET_RAW`) and `IcmpSendEcho2` on Windows come later.
 - **UDP echo** (skeleton): a datagram with a token to an echo port, timed to its return. Used for
   RFC 862 echo servers and for the accuracy test.
-- **TCP connect** (skeleton): time to an established connection, the TCPPing equivalent.
+- **TCP connect** (skeleton): time to an established connection, the TCPPing equivalent. The
+  connection is shut down with a FIN and drained, never dropped with a reset.
+- **SMTP** (built): connect, read the `220` banner (multi line too), send `QUIT`, time connect
+  to banner. A `421` or `554` banner is a refusal.
 - **HTTP/HTTPS** (skeleton): our own HTTP/1.1 client on tokio and rustls, timing DNS, connect,
-  TLS, time to first byte and total, with status and the certificate's days to expiry.
+  TLS, time to first byte and total, with status and the certificate's days to expiry. `HEAD`
+  by default, falling back to `GET` for good after a 405 or 501.
 - **DNS** (built): one query over UDP built with `hickory-proto` (the wire format only, not the
   resolver, so the time is one round trip to the server named, with no cache or retries in the
   way). A fresh socket and random id per query; replies must match the id and the question.
@@ -59,7 +63,8 @@ receive path and timestamps. The ICMP code needed is about 200 lines.
   event id with `limit 1` timed to the first `EVENT` or `EOSE`, each as a phase. `tokio-tungstenite`
   over our own TCP and rustls stream so the phases stay separate. Publishing an `EVENT` and timing
   its `OK` needs a key and writes to the relay, so it waits for the user. A relay that refuses
-  the upgrade (an HTTP error such as 503) counts as a lost ping with the status as the reason.
+  the upgrade (an HTTP error such as 503) is recorded as `refused` with the status, kept out of
+  loss, and makes the target back off.
 - **TWAMP-light, STUN, QUIC handshake, looking glass** (later): TWAMP-light reflector is a UDP
   probe with timestamps in the payload; STUN binding request is a UDP probe; QUIC via `quinn`;
   the lg.lnvps.cloud check as an HTTP probe with a body matcher.
@@ -73,8 +78,11 @@ receive path and timestamps. The ICMP code needed is about 200 lines.
 Options: a burst of N pings per step (SmokePing, fping `-C`), continuous pings exported as a
 histogram (smokeping_prober), or N pings spread over the step.
 
-Choice: N pings spread evenly over the step (default 20 per 60 s), each with its own timeout, so
-the step describes the whole interval at the same packet cost. Every RTT is kept. Per step we
+Choice: N pings spread evenly over the step, each with its own timeout, so the step describes
+the whole interval at the same packet cost. N defaults by probe: 20 per 60 s for icmp and udp,
+5 for dns, 3 for tcp and 1 for http, nostr and smtp, because those pings are whole connections
+or queries. Connection pings go at a random point inside their slot (`gap * i + rand(0, gap)`),
+so they never line up with the clock or with each other. Every RTT is kept. Per step we
 record pings sent, the RTT of each sequence number or a loss, duplicates and reordering
 (a reply that arrives after a reply to a later sequence number). The summary is derived, never
 stored: loss, min, p10, p25, median, p75, p90, max, mean, RFC 3550 jitter over consecutive
@@ -86,6 +94,19 @@ harmonic midpoint, so every quantile is within 1% of the exact value. Counts are
 step of 20 RTTs is at most 20 entries. Merging is adding counts, which is what makes long ranges
 honest. HdrHistogram was the other candidate; its layout spends far more buckets for the same
 relative error across 1 us to 100 s, and it brings little else here.
+
+Politeness. A server sees haze as one client, however many targets point at it, so the limits
+are per destination (host and port, with the scheme's default port filled in):
+
+- Config time: the summed rate of connection targets on one destination may not pass 6 a
+  minute unless a target there sets `allow_aggressive = true`. Rejecting rather than warning,
+  because a ban is slow to undo and the error says exactly what to change.
+- Run time: one `Limiter` per destination hands out start slots at least 60 s / budget apart,
+  shared by every target on it, so overlapping targets queue instead of adding up.
+- Backoff per target: a refusal (HTTP 429 or 503, a refused WebSocket upgrade, TCP reset, TLS
+  alert, SMTP 421 or 554) doubles the step up to an hour and takes `Retry-After` when it is
+  longer; three clean steps restore it. Refusals by HTTP status count as `refused`, kept out of
+  loss. The hub keeps the reason and the time to the next step for the dashboard.
 
 ## 3. Storage
 

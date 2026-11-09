@@ -86,7 +86,6 @@ settings its children inherit. Tags and alerts add up down the tree.
 ```toml
 [defaults]
 step = "60s"
-pings = 20
 timeout = "2s"
 
 [storage]
@@ -140,19 +139,24 @@ host = "8.8.8.8"
 
 [targets.nostr.snort]
 url = "wss://relay.snort.social"
-pings = 3
 timeout = "5s"
 
 [targets.web.example]
 url = "https://example.com/"
-pings = 5
+
+[targets.mail.mx]
+host = "mx.example.com"
+probe = "smtp"
 ```
 
-Per target settings: `probe` (`icmp`, `tcp`, `udp`, `http`, `nostr`, `dns`), `step` (at least
-5 s), `pings` (1 to 20), `timeout`, `family` (4 or 6), `source`, `size`, `tos`, `port`, `tags`,
-`alerts`, `depends`. A `url` starting with `https://` or `http://` picks the http probe and one
-starting with `wss://` or `ws://` the nostr probe.
+Per target settings: `probe` (`icmp`, `tcp`, `udp`, `http`, `nostr`, `dns`, `smtp`), `step` (at
+least 5 s), `pings` (1 to 20), `timeout`, `family` (4 or 6), `source`, `size`, `tos`, `port`,
+`method` (`HEAD` or `GET` for http), `allow_aggressive`, `tags`, `alerts`, `depends`. A `url`
+starting with `https://` or `http://` picks the http probe and one starting with `wss://` or
+`ws://` the nostr probe.
 
+- The **http** probe sends `HEAD` unless `method` is set, and switches to `GET` for good if the
+  server answers `HEAD` with 405 or 501. 429 and 503 are recorded as `refused`, not loss.
 - The **nostr** probe connects to the relay, sends a `REQ` for one event id with `limit 1` and
   times the first `EVENT` or `EOSE`. Set `event` to a 64 character hex id to ask for a known
   event; the default is an id no relay holds, so the answer is `EOSE`. A relay that answers
@@ -161,6 +165,40 @@ starting with `wss://` or `ws://` the nostr probe.
 - The **dns** probe asks the server in `host` (port 53 unless `port` is set) for `name` with
   `record` (`A`, `AAAA`, `NS`, `MX`, `TXT`, `SOA` or `CNAME`; `A` by default) and times the
   answer. NXDOMAIN counts as an answer; SERVFAIL and REFUSED count as lost.
+- The **smtp** probe connects (port 25 unless `port` is set), reads the `220` banner, sends
+  `QUIT` and times connect to banner, so the mail server logs an ordinary session instead of a
+  dropped connect. A `421` or `554` banner counts as a refusal and makes haze back off.
+
+## Being a good neighbour
+
+Every tcp, http, nostr or smtp ping is a full connection, and a service that sees too many from
+one address will rate limit or ban it (fail2ban, Stalwart's auto-ban, Cloudflare, relay limits).
+So haze keeps its connection rate low by default:
+
+| Probe | Default when `pings` is not set |
+| --- | --- |
+| icmp, udp | 20 per step (60 s) |
+| dns | 5 per step |
+| tcp | 3 per step |
+| http, nostr, smtp | 1 per step |
+
+- **A cap per host.** All connection targets that share one host and port share one budget of
+  6 connections a minute. `haze check` and `haze run` refuse a config that would go over it, and
+  name the target and the rate. Set `allow_aggressive = true` on a target you own to lift the
+  cap; the budget then grows to what the config asks for.
+- **One limiter per host.** While running, the pings of every target on one host and port go
+  through one queue that spaces them at least 10 s apart (60 s / 6), so five http targets on one
+  site do not add up to five times the traffic.
+- **Backing off.** A 429 or 503, a refused WebSocket upgrade, a TCP reset, a TLS alert or an
+  SMTP 421 doubles that target's step, up to an hour. A `Retry-After` in seconds is honoured
+  when it is longer. Three clean steps in a row bring the step back. The dashboard and the run
+  log show "backing off" with the reason and when the next step is due.
+- **Polite connections.** Requests carry `User-Agent: haze/<version> (+https://github.com/v0l/haze)`.
+  Connections are closed with a FIN after the answer, never a reset, and connection pings are
+  placed at a random point in their slot of the step so they never arrive in step with the
+  clock.
+- `haze check` warns when a plain tcp probe targets port 22, 25 or 587, and points to icmp or
+  the smtp probe.
 
 Alert rules: a metric (`loss`, `min`, `median`, `mean`, `max`, `p10` to `p99`, `jitter`,
 `smoke`), a comparison and a threshold in ms, % or `Nx baseline`, then an optional window
