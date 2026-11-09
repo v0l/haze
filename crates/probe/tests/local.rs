@@ -81,7 +81,9 @@ fn udp_receive_carries_a_kernel_stamp() {
     haze_probe::net::enable_timestamps(&socket2::SockRef::from(&receiver));
     let before = std::time::SystemTime::now();
     let sender = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
-    sender.send_to(b"stamp", receiver.local_addr().unwrap()).unwrap();
+    sender
+        .send_to(b"stamp", receiver.local_addr().unwrap())
+        .unwrap();
     let mut buf = [0u8; 64];
     let (n, stamp) =
         haze_probe::net::recv_stamped(&socket2::SockRef::from(&receiver), &mut buf).unwrap();
