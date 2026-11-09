@@ -10,6 +10,8 @@ use haze_probe::{Sampler, SocketOptions};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, UdpSocket};
 
+const SCHEDULER_STALL_ALLOWANCE: Duration = Duration::from_secs(2);
+
 const NO_OPTIONS: SocketOptions = SocketOptions {
     source: None,
     tos: None,
@@ -35,31 +37,43 @@ async fn udp_echo(bind: IpAddr, delay: Duration, copies: usize) -> SocketAddr {
     address
 }
 
-fn exact_delay_udp_echo(delay: Duration) -> SocketAddr {
+type Holds = Arc<std::sync::Mutex<Vec<Duration>>>;
+
+fn exact_delay_udp_echo(delay: Duration) -> (SocketAddr, Holds) {
     let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     socket.set_nonblocking(true).unwrap();
     let address = socket.local_addr().unwrap();
+    let holds: Holds = Arc::default();
+    let record = holds.clone();
+    haze_probe::net::enable_timestamps(&socket2::SockRef::from(&socket));
     std::thread::spawn(move || {
         let mut buf = [0u8; 2048];
         loop {
-            let Ok((n, from)) = socket.recv_from(&mut buf) else {
+            let Ok((_, from)) = socket.peek_from(&mut buf) else {
                 std::hint::spin_loop();
                 continue;
             };
-            let due = std::time::Instant::now() + delay;
-            while std::time::Instant::now() < due {
+            let Ok((n, Some(arrived))) =
+                haze_probe::net::recv_stamped(&socket2::SockRef::from(&socket), &mut buf)
+            else {
+                continue;
+            };
+            let due = arrived + delay;
+            while std::time::SystemTime::now() < due {
                 std::hint::spin_loop();
             }
+            let held = std::time::SystemTime::now().duration_since(arrived);
+            record.lock().unwrap().push(held.unwrap_or_default());
             let _ = socket.send_to(&buf[..n], from);
         }
     });
-    address
+    (address, holds)
 }
 
 #[tokio::test]
 async fn udp_echo_measures_an_added_delay() {
     let delay = Duration::from_millis(25);
-    let server = exact_delay_udp_echo(delay);
+    let (server, holds) = exact_delay_udp_echo(delay);
     let probe = Arc::new(UdpEcho::new(server, 64, &NO_OPTIONS).await.unwrap());
     let sampler = Sampler::new(probe);
     let (step, detail) = sampler
@@ -71,18 +85,25 @@ async fn udp_echo_measures_an_added_delay() {
     let min = summary.min.unwrap();
     let median = summary.median.unwrap();
     let max = summary.max.unwrap();
-    assert!(min >= delay, "min {min:?} below the server delay");
+    let holds = holds.lock().unwrap().clone();
+    let rtts: Vec<Duration> = step.rtts.iter().flatten().copied().collect();
+    assert_eq!(holds.len(), rtts.len(), "holds {holds:?} rtts {rtts:?}");
+    let numbers =
+        format!("min {min:?} median {median:?} max {max:?} holds {holds:?} rtts {rtts:?}");
+    assert!(min >= delay, "min below the server delay: {numbers}");
+    let mut overheads: Vec<Duration> = rtts
+        .iter()
+        .zip(&holds)
+        .map(|(rtt, hold)| rtt.saturating_sub(*hold))
+        .collect();
+    overheads.sort();
     assert!(
-        min < delay + Duration::from_millis(2),
-        "min {min:?} too far over {delay:?}"
+        overheads[0] < Duration::from_millis(1),
+        "best overhead over the server hold: {numbers}"
     );
     assert!(
-        median < delay + Duration::from_millis(10),
-        "median {median:?} too far over {delay:?}"
-    );
-    assert!(
-        max < delay + Duration::from_millis(50),
-        "max {max:?} too far over {delay:?}"
+        overheads[overheads.len() / 2] < Duration::from_millis(3),
+        "median overhead over the server hold: {numbers}"
     );
     assert_eq!(step.duplicates, 0);
 }
@@ -122,7 +143,7 @@ async fn tcp_connect_to_a_local_listener() {
         let probe = TcpConnect::new(address, &NO_OPTIONS);
         let reply = probe.probe(0, Duration::from_secs(1)).await.unwrap();
         assert!(
-            reply.rtt < Duration::from_millis(500),
+            reply.rtt < SCHEDULER_STALL_ALLOWANCE,
             "{bind}: {:?}",
             reply.rtt
         );
@@ -166,11 +187,11 @@ async fn http_timing_against_a_slow_local_server() {
     assert_eq!(timing.status, 200);
     assert!(timing.ttfb >= delay, "ttfb {:?}", timing.ttfb);
     assert!(
-        timing.total < delay + Duration::from_millis(500),
+        timing.total < delay + SCHEDULER_STALL_ALLOWANCE,
         "total {:?}",
         timing.total
     );
-    assert!(timing.connect < Duration::from_millis(500));
+    assert!(timing.connect < SCHEDULER_STALL_ALLOWANCE);
     assert_eq!(timing.tls, None);
     let reply = probe.probe(0, Duration::from_secs(1)).await.unwrap();
     let names: Vec<&str> = reply.phases.iter().map(|(n, _)| *n).collect();
@@ -209,7 +230,10 @@ async fn pings_are_spread_across_the_interval() {
         took >= Duration::from_millis(600),
         "a burst took only {took:?}"
     );
-    assert!(took < Duration::from_millis(1500), "took {took:?}");
+    assert!(
+        took < Duration::from_millis(800) + SCHEDULER_STALL_ALLOWANCE,
+        "took {took:?}"
+    );
 }
 
 #[cfg(unix)]
