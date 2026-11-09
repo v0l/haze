@@ -1,0 +1,20 @@
+[package]
+name = "haze-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+haze-core.workspace = true
+haze-store.workspace = true
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "query", "json"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+resvg = { version = "0.45", default-features = false, features = ["text"] }
+serde.workspace = true
+serde_json = "1.0"
+tokio.workspace = true
+
+[dev-dependencies]
+http-body-util = "0.1"
+tempfile = "3"
+tower = { version = "0.5", features = ["util"] }

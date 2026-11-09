@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>haze</title>
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/app.css">
+<script>document.documentElement.dataset.theme = localStorage.getItem("haze-theme") || "dark";</script>
+</head>
+<body>
+<header class="bar">
+  <a class="brand" href="#/"><img src="/icon.svg" alt="" width="22" height="22">haze</a>
+  <nav>
+    <a href="#/" data-nav="tree">Targets</a>
+    <a href="#/compare" data-nav="compare">Compare</a>
+    <a href="#/incidents" data-nav="incidents">Incidents</a>
+  </nav>
+  <span id="live" class="live" title="Live updates">live</span>
+  <button id="theme" class="ghost" type="button" aria-label="Switch between dark and light">light</button>
+</header>
+<main id="view"><p class="muted">Loading</p></main>
+<noscript><p>The dashboard needs JavaScript. Graphs are also at <code>/api/graph/&lt;target&gt;.svg</code>.</p></noscript>
+<script type="module" src="/app.js"></script>
+</body>
+</html>

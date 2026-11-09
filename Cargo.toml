@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/core", "crates/probe", "crates/store", "crates/cli"]
+members = ["crates/core", "crates/probe", "crates/store", "crates/web", "crates/cli"]
 resolver = "3"
 
 [workspace.package]
@@ -12,6 +12,7 @@ description = "Latency and loss monitoring with smoke graphs, a modern SmokePing
 haze-core = { path = "crates/core" }
 haze-probe = { path = "crates/probe" }
 haze-store = { path = "crates/store" }
+haze-web = { path = "crates/web" }
 anyhow = "1.0"
 clap = { version = "4.6", features = ["derive", "env"] }
 crc32fast = "1.4"
