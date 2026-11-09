@@ -11,10 +11,19 @@ All notable changes to haze are listed here. The format follows
   Linux.
 - UDP echo, TCP connect and HTTP/HTTPS probes. HTTP reports DNS, connect, TLS and first byte
   times, the status and the days left on the certificate.
+- A Nostr relay probe that times a `REQ` to its first `EVENT` or `EOSE`, and a DNS probe.
 - Pings spread across each step, with loss, duplicates, reordering and RFC 3550 jitter.
 - A log bucket histogram within 1% of exact percentiles that merges across steps.
-- A store of one file per target per day, checked record by record so a torn write is dropped.
+- A store of one file per target per day, checked record by record so a torn write is dropped,
+  with hourly and daily rollups of closed days for long ranges.
 - Alert rules like `median > 20ms 3 of 5`, `loss >= 10% for 3 steps`, `smoke > 2x baseline` and
   SmokePing patterns, with clear delays, flap detection and dependencies.
-- A TOML config with groups that pass settings, tags and alerts to their targets.
+- Webhook and ntfy notifications, filtered by tag.
+- A web dashboard served by `haze run` on 127.0.0.1:8480: the target tree with tags and status
+  dots, a target page with the smoke graph, ranges from 3 hours to 400 days, pan and zoom on one
+  time axis, hover readouts, compare for up to 6 targets, incidents, light and dark themes and a
+  phone layout. It updates as steps finish.
+- SVG and PNG graph endpoints, a JSON API, server-sent events and OpenMetrics `/metrics`.
+- A TOML config with groups that pass settings, tags and alerts to their targets. `haze.toml` is
+  the default; `HAZE_CONFIG`, `HAZE_DATA` and `HAZE_LISTEN` override it.
 - `haze ping`, `check`, `run` and `show`.

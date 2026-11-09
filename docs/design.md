@@ -49,11 +49,17 @@ receive path and timestamps. The ICMP code needed is about 200 lines.
 - **TCP connect** (skeleton): time to an established connection, the TCPPing equivalent.
 - **HTTP/HTTPS** (skeleton): our own HTTP/1.1 client on tokio and rustls, timing DNS, connect,
   TLS, time to first byte and total, with status and the certificate's days to expiry.
-- **DNS** (next): `hickory-resolver` or a hand built query over UDP, timed per server.
+- **DNS** (built): one query over UDP built with `hickory-proto` (the wire format only, not the
+  resolver, so the time is one round trip to the server named, with no cache or retries in the
+  way). A fresh socket and random id per query; replies must match the id and the question.
+  NXDOMAIN is an answer, SERVFAIL and REFUSED are failures.
 - **Path** (next): mtr style per hop loss and RTT with TTL limited DGRAM probes; `trippy-core`
   is the fallback if hand rolling gets long.
-- **Nostr relay** (next): WebSocket connect time, then a REQ with a fresh subscription id timed to
-  EOSE, and optionally an EVENT timed to its OK, for the user's relays.
+- **Nostr relay** (built): DNS, TCP connect, TLS, the WebSocket upgrade, then a `REQ` for one
+  event id with `limit 1` timed to the first `EVENT` or `EOSE`, each as a phase. `tokio-tungstenite`
+  over our own TCP and rustls stream so the phases stay separate. Publishing an `EVENT` and timing
+  its `OK` needs a key and writes to the relay, so it waits for the user. relay.damus.io refuses
+  HTTP/1.1 upgrades (503, issue #369).
 - **TWAMP-light, STUN, QUIC handshake, looking glass** (later): TWAMP-light reflector is a UDP
   probe with timestamps in the payload; STUN binding request is a UDP probe; QUIC via `quinn`;
   the lg.lnvps.cloud check as an HTTP probe with a body matcher.
@@ -97,36 +103,59 @@ record (power cut) fails its CRC and is cut off when the file is next opened for
 store is crash safe without a WAL. Retention is deleting old day files. Copying, backing up and
 inspecting are file operations.
 
-Queries (skeleton) read the days in range and merge steps into buckets of the requested width,
-each bucket a merged histogram with sent and received counts. Rollup tiers come next: hourly and
-daily files of serialised histograms written when a day closes, so a year view reads 365 small
-records instead of 525,600 steps. Rollups are histograms, so their percentiles are real.
+Queries read the days in range and merge steps into buckets of the requested width, each bucket
+a merged histogram with sent and received counts. When a day has closed, `haze run` writes a
+rollup beside it, `<YYYY-MM-DD>.hzr`: one histogram for the day and one per hour, with a CRC and
+written through a rename so it is all or nothing. A query whose width and start are whole hours
+or days reads the rollups for the parts it covers whole and raw steps for the edges; any other
+width reads raw steps. A late write into a rolled day deletes its rollup and a corrupt one is
+ignored, so the raw files stay the truth. A 400 day view reads 400 small rollups instead of
+576,000 steps. Rollups are histograms, so their percentiles stay within the 1% bucket bound:
+a test checks a 7 day query over rolled up data against exact percentiles of every RTT.
 
-Export (next): `/metrics` in OpenMetrics with native histogram style buckets and the summary
-quantiles as gauges, Influx line protocol for VictoriaMetrics and InfluxDB, and a reader for a
-Prometheus `smokeping_prober` histogram so its data can be graphed here. Import of SmokePing RRD
-data through `rrdtool dump` XML: the pingN columns become one step record each, at whatever
+Export: `/metrics` in OpenMetrics (built) with the RTT as a histogram on smokeping_prober's
+buckets, so existing Grafana boards for it work, plus the last step's loss and quantiles as
+gauges. Next: Influx line protocol for VictoriaMetrics and InfluxDB, a reader for a Prometheus
+`smokeping_prober` histogram so its data can be graphed here, and import of SmokePing RRD data
+through `rrdtool dump` XML: the pingN columns become one step record each, at whatever
 resolution the RRA still has.
 
-Alert history, users and API tokens go in one redb file beside the data; samples do not.
+Alert history is an append-only `alerts.jsonl` beside the data. Incidents still open when haze
+stops are closed with a `restart` record on the next start, because the alert state is not kept
+across restarts. Users and API tokens, when they come, go in one redb file; samples do not.
 
 ## 4. UI
 
-Options: a Preact client served by axum, an egui app compiled to WASM, or server rendered pages.
+The web dashboard is the only UI (user decision): no desktop app.
 
-Choice: one binary serves everything with axum. Pages are server rendered HTML, and the graphs
-are SVG drawn in Rust from the merged histograms: the smoke band as stacked quantile areas,
-the median line coloured by loss, loss as a strip underneath. The same renderer produces the
-PNG and SVG exports and the share link images, so a graph looks the same everywhere and works
-without JavaScript. A small Preact client adds zoom, pan, crosshair and live updates by
-fetching `/api/series` JSON and drawing on a canvas with one time axis shared by every graph on
-the page. egui in WASM was rejected: a large download, weak text and accessibility, and poor on
-phones.
+Options for the client: Preact built with Vite into a committed `web/dist`, an egui app compiled
+to WASM, or a hand-written ES module with no build step.
 
-Navigation is tags as well as the tree: a target path (`dns/cloudflare`) and any number of tags
-(`dns`, `anycast`, `site:dub`). Views: overview grid, single target with every vantage point
-overlaid, compare (any targets overlaid), loss heatmap (targets by time), incident timeline. A
-share link fixes the range in the URL. Dark mode from `prefers-color-scheme`, a mobile layout.
+Choice: one binary serves everything with axum, and the graphs are SVG drawn in Rust from the
+merged histograms: min to max, p10 to p90 and p25 to p75 as stacked shaded bands, the median as a
+line coloured by loss with SmokePing's colours, and steps with every ping lost shaded red. The
+same renderer makes the `/api/graph/<target>.svg` endpoint, the PNG export (through `resvg` with
+an embedded DejaVu Sans Mono, so it needs no system fonts) and the dashboard's own graphs, so a
+graph looks the same everywhere and can be embedded anywhere.
+
+The client is one hand-written ES module (`crates/web/client/app.js`, about 650 lines) and one
+stylesheet, embedded with `include_str!`. It was picked over Preact and Vite because the pages are
+small and mostly drawn by the server: a build step would add Node to every change, a committed
+`dist` that can drift from its source, and a dependency tree to audit, for what is a few lists
+and a range bar. The module asks `/api/series` for the numbers behind the hover readout and
+`/api/graph` for the picture, with one time window shared by every graph on the page, so pan
+and zoom move them together. Live updates come over SSE (`/api/events`): each finished step
+updates the status dots and redraws the graphs of that target when the range ends at now.
+egui in WASM was rejected: a large download, weak text and accessibility, and poor on phones.
+
+Navigation is tags as well as the tree: a target path (`dns/cloudflare`) and any number of tags.
+Views (built): the tree with status dots and small graphs, a target page, compare (up to 6
+targets overlaid), incidents with the alert log. A share link fixes the range in the URL. Dark by
+default with a light switch, and a phone layout. Next: every vantage point of a target overlaid,
+a loss heatmap (targets by time), and maintenance windows on the incident list.
+
+The dashboard listens on 127.0.0.1:8480 and has no login; exposing it means a reverse proxy with
+authentication until haze has users.
 
 ## 5. Alerts
 
@@ -153,8 +182,9 @@ past `flap_limit` the alert is marked flapping and notifications stop until it s
 Dependencies: a target's `depends` names another target; while that one has an active alert the
 child's alerts are held. Maintenance windows silence by tag or path for a time range.
 
-Routes (next): Nostr DM (NIP-17) from a haze key, webhook (JSON), SMTP, ntfy, Telegram.
-Each route has a filter by tag and severity. History of raises and clears goes in the redb file.
+Routes: webhook (JSON) and ntfy are built, each filtered by tags, retried twice on server
+errors and sent from a queue so a slow endpoint never holds up probing. Next: Nostr DM (NIP-17)
+from a haze key, SMTP, Telegram, and a severity filter.
 
 ## 6. Distributed
 
