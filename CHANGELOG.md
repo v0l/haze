@@ -18,6 +18,8 @@ All notable changes to haze are listed here. The format follows
   with hourly and daily rollups of closed days for long ranges.
 - Alert rules like `median > 20ms 3 of 5`, `loss >= 10% for 3 steps`, `smoke > 2x baseline` and
   SmokePing patterns, with clear delays, flap detection and dependencies.
+- A multi-arch Docker image at `ghcr.io/v0l/haze` (linux/amd64, linux/arm64), non-root on
+  `scratch`, with an ICMP raw socket fallback under `CAP_NET_RAW` and a Compose example.
 - Webhook and ntfy notifications, filtered by tag.
 - A web dashboard served by `haze run` on 127.0.0.1:8480: the target tree with tags and status
   dots, a target page with the smoke graph, ranges from 3 hours to 400 days, pan and zoom on one

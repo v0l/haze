@@ -1,0 +1,14 @@
+services:
+  haze:
+    image: ghcr.io/v0l/haze:latest
+    restart: unless-stopped
+    ports:
+      - "8480:8480"
+    volumes:
+      - ./haze.toml:/haze.toml:ro
+      - haze-data:/data
+    sysctls:
+      net.ipv4.ping_group_range: "0 2147483647"
+
+volumes:
+  haze-data:

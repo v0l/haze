@@ -36,6 +36,8 @@ axis, `|` is the median.
 
 ICMP uses unprivileged datagram sockets, so it needs no root. On Linux your group must be inside
 `net.ipv4.ping_group_range` (most distributions allow every group); macOS allows it by default.
+When that is refused haze falls back to a raw socket if it holds `CAP_NET_RAW`, and when it has
+neither the error says which setting to change.
 
 `haze run` and `haze check` read `haze.toml` unless given a path or `HAZE_CONFIG`. `HAZE_DATA`
 overrides the data directory and `HAZE_LISTEN` the dashboard address.
@@ -170,6 +172,47 @@ Notifications go to every `[[notify]]` route whose `tags` match the target, or t
 with no `tags`. `webhook` posts JSON (`target`, `alert`, `event`, `at_ms`, `text`, `comment`,
 `loss`, `median_ms`); `ntfy` posts the text with a title, priority and tags. Server errors are
 retried twice.
+
+## Docker
+
+Images for linux/amd64 and linux/arm64 are at `ghcr.io/v0l/haze`: `latest` and `sha-<commit>`
+follow main, and release tags publish `0.1.0` and `0.1`. The image is a static binary on
+`scratch`, runs as user 65532 and keeps its data in the `/data` volume.
+
+```
+docker pull ghcr.io/v0l/haze:latest
+docker run -d --name haze --restart unless-stopped \
+  --sysctl net.ipv4.ping_group_range="0 2147483647" \
+  -v $PWD/haze.toml:/haze.toml:ro -v haze-data:/data \
+  -p 8480:8480 ghcr.io/v0l/haze:latest
+```
+
+ICMP inside a container needs one of two things. `--sysctl net.ipv4.ping_group_range="0 2147483647"`
+allows unprivileged ping sockets in the container's network namespace, which is the preferred way.
+Otherwise haze uses a raw socket, which needs `CAP_NET_RAW`: Docker grants it by default, but
+with `--cap-drop ALL` or a runtime that drops it add `--cap-add NET_RAW`. With neither, ICMP
+targets fail with an error naming both flags. The other probes need nothing.
+
+The config's `[web] listen` and `[storage] dir` are overridden in the image by `HAZE_LISTEN`
+(`0.0.0.0:8480`) and `HAZE_DATA` (`/data`). For Compose, copy
+[`docker-compose.example.yml`](docker-compose.example.yml) next to your `haze.toml`:
+
+```yaml
+services:
+  haze:
+    image: ghcr.io/v0l/haze:latest
+    restart: unless-stopped
+    ports:
+      - "8480:8480"
+    volumes:
+      - ./haze.toml:/haze.toml:ro
+      - haze-data:/data
+    sysctls:
+      net.ipv4.ping_group_range: "0 2147483647"
+
+volumes:
+  haze-data:
+```
 
 ## Build
 
