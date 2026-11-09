@@ -53,11 +53,12 @@ fn exact_delay_udp_echo(delay: Duration) -> (SocketAddr, Holds) {
                 std::hint::spin_loop();
                 continue;
             };
-            let Ok((n, Some(arrived))) =
+            let Ok((n, stamp)) =
                 haze_probe::net::recv_stamped(&socket2::SockRef::from(&socket), &mut buf)
             else {
                 continue;
             };
+            let arrived = stamp.unwrap_or_else(std::time::SystemTime::now);
             let due = arrived + delay;
             while std::time::SystemTime::now() < due {
                 std::hint::spin_loop();
