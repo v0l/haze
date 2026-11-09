@@ -351,6 +351,25 @@ impl Config {
     pub fn target(&self, path: &str) -> Option<&Target> {
         self.targets.iter().find(|t| t.path == path)
     }
+
+    pub fn warnings(&self) -> Vec<String> {
+        self.targets
+            .iter()
+            .filter(|t| t.probe == ProbeKind::Tcp)
+            .filter_map(|t| {
+                let instead = match t.port? {
+                    22 => "icmp, or a longer step: sshd logs every bare connect and fail2ban counts them",
+                    25 | 587 => "probe = \"smtp\", which reads the banner and says QUIT so the mail server logs a normal session",
+                    _ => return None,
+                };
+                Some(format!(
+                    "target `{}`: a bare tcp connect to port {} looks like a scan; use {instead}",
+                    t.path,
+                    t.port.unwrap_or_default(),
+                ))
+            })
+            .collect()
+    }
 }
 
 const NODE_KEYS: [&str; 20] = [
@@ -815,6 +834,28 @@ step = "30s"
         .unwrap();
         assert_eq!(allowed.targets[0].pings, 20);
         assert!(allowed.targets[0].allow_aggressive);
+    }
+
+    #[test]
+    fn plain_tcp_to_mail_or_ssh_ports_is_warned_about() {
+        let config = Config::parse(
+            "[targets.ssh]\nhost = \"x\"\nprobe = \"tcp\"\nport = 22\n[targets.mx]\nhost = \"x\"\nprobe = \"tcp\"\nport = 25\n[targets.sub]\nhost = \"y\"\nprobe = \"tcp\"\nport = 587\n[targets.web]\nhost = \"x\"\nprobe = \"tcp\"\nport = 443\n[targets.smtp]\nhost = \"z\"\nprobe = \"smtp\"",
+        )
+        .unwrap();
+        let warnings = config.warnings();
+        assert_eq!(warnings.len(), 3, "{warnings:?}");
+        assert!(
+            warnings[0].contains("`ssh`") && warnings[0].contains("icmp"),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings[1].contains("`mx`") && warnings[1].contains("smtp"),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings[2].contains("`sub`") && warnings[2].contains("smtp"),
+            "{warnings:?}"
+        );
     }
 
     #[test]

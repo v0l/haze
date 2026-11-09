@@ -165,6 +165,9 @@ fn main() -> Result<()> {
             no_web,
         } => {
             let mut config = load(&config)?;
+            for warning in config.warnings() {
+                eprintln!("warning: {warning}");
+            }
             if let Some(data) = data {
                 config.storage_dir = data.display().to_string();
             }
@@ -227,6 +230,9 @@ pub fn describe(config: &Config) -> String {
             out.push_str(&format!(" alerts {}", t.alerts.join(",")));
         }
         out.push('\n');
+    }
+    for warning in config.warnings() {
+        out.push_str(&format!("warning: {warning}\n"));
     }
     out
 }
@@ -321,6 +327,16 @@ fn show(dir: &PathBuf, last: Duration, only: Option<&str>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn check_prints_warnings_after_the_targets() {
+        let config =
+            Config::parse("[targets.ssh]\nhost = \"example.com\"\nprobe = \"tcp\"\nport = 22")
+                .unwrap();
+        let text = describe(&config);
+        assert!(text.contains("warning: target `ssh`"), "{text}");
+        assert!(text.contains("every 60s x3"), "{text}");
+    }
 
     #[test]
     fn shipped_examples_parse() {
