@@ -61,6 +61,31 @@ pub fn prepare(socket: &Socket, target: IpAddr, options: &SocketOptions) -> io::
 }
 
 #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+mod stamp {
+    pub const ENABLE: libc::c_int = libc::SO_TIMESTAMPNS;
+    pub const MESSAGE: libc::c_int = libc::SCM_TIMESTAMPNS;
+
+    pub unsafe fn read(data: *const u8) -> std::time::Duration {
+        let ts: libc::timespec = unsafe { std::ptr::read_unaligned(data as *const libc::timespec) };
+        std::time::Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32)
+    }
+}
+
+#[cfg(target_vendor = "apple")]
+mod stamp {
+    pub const ENABLE: libc::c_int = libc::SO_TIMESTAMP;
+    pub const MESSAGE: libc::c_int = libc::SCM_TIMESTAMP;
+
+    pub unsafe fn read(data: *const u8) -> std::time::Duration {
+        let tv: libc::timeval = unsafe { std::ptr::read_unaligned(data as *const libc::timeval) };
+        std::time::Duration::new(tv.tv_sec as u64, tv.tv_usec as u32 * 1000)
+    }
+}
+
+#[cfg(any(
+    all(target_os = "linux", target_pointer_width = "64"),
+    target_vendor = "apple"
+))]
 pub fn enable_timestamps(socket: &Socket) {
     use std::os::fd::AsRawFd;
     let on: libc::c_int = 1;
@@ -68,17 +93,23 @@ pub fn enable_timestamps(socket: &Socket) {
         libc::setsockopt(
             socket.as_raw_fd(),
             libc::SOL_SOCKET,
-            libc::SO_TIMESTAMPNS,
+            stamp::ENABLE,
             &on as *const _ as *const libc::c_void,
             std::mem::size_of_val(&on) as libc::socklen_t,
         );
     }
 }
 
-#[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+#[cfg(not(any(
+    all(target_os = "linux", target_pointer_width = "64"),
+    target_vendor = "apple"
+)))]
 pub fn enable_timestamps(_socket: &Socket) {}
 
-#[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+#[cfg(any(
+    all(target_os = "linux", target_pointer_width = "64"),
+    target_vendor = "apple"
+))]
 pub fn recv_stamped(socket: &Socket, buf: &mut [u8]) -> io::Result<(usize, Option<SystemTime>)> {
     use std::os::fd::AsRawFd;
     let mut iov = libc::iovec {
@@ -99,14 +130,8 @@ pub fn recv_stamped(socket: &Socket, buf: &mut [u8]) -> io::Result<(usize, Optio
     unsafe {
         let mut cmsg = libc::CMSG_FIRSTHDR(&msg);
         while !cmsg.is_null() {
-            if (*cmsg).cmsg_level == libc::SOL_SOCKET && (*cmsg).cmsg_type == libc::SCM_TIMESTAMPNS
-            {
-                let ts: libc::timespec =
-                    std::ptr::read_unaligned(libc::CMSG_DATA(cmsg) as *const libc::timespec);
-                stamp = Some(
-                    SystemTime::UNIX_EPOCH
-                        + std::time::Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32),
-                );
+            if (*cmsg).cmsg_level == libc::SOL_SOCKET && (*cmsg).cmsg_type == stamp::MESSAGE {
+                stamp = Some(SystemTime::UNIX_EPOCH + stamp::read(libc::CMSG_DATA(cmsg)));
             }
             cmsg = libc::CMSG_NXTHDR(&msg, cmsg);
         }
@@ -114,7 +139,10 @@ pub fn recv_stamped(socket: &Socket, buf: &mut [u8]) -> io::Result<(usize, Optio
     Ok((n as usize, stamp))
 }
 
-#[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+#[cfg(not(any(
+    all(target_os = "linux", target_pointer_width = "64"),
+    target_vendor = "apple"
+)))]
 pub fn recv_stamped(socket: &Socket, buf: &mut [u8]) -> io::Result<(usize, Option<SystemTime>)> {
     use std::io::Read;
     let mut reader = socket;

@@ -71,6 +71,29 @@ fn exact_delay_udp_echo(delay: Duration) -> (SocketAddr, Holds) {
     (address, holds)
 }
 
+#[cfg(any(
+    all(target_os = "linux", target_pointer_width = "64"),
+    target_vendor = "apple"
+))]
+#[test]
+fn udp_receive_carries_a_kernel_stamp() {
+    let receiver = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    haze_probe::net::enable_timestamps(&socket2::SockRef::from(&receiver));
+    let before = std::time::SystemTime::now();
+    let sender = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    sender.send_to(b"stamp", receiver.local_addr().unwrap()).unwrap();
+    let mut buf = [0u8; 64];
+    let (n, stamp) =
+        haze_probe::net::recv_stamped(&socket2::SockRef::from(&receiver), &mut buf).unwrap();
+    let after = std::time::SystemTime::now();
+    assert_eq!(&buf[..n], b"stamp");
+    let stamp = stamp.expect("no kernel receive stamp");
+    assert!(
+        stamp + Duration::from_millis(1) >= before && stamp <= after,
+        "{before:?} {stamp:?} {after:?}"
+    );
+}
+
 #[tokio::test]
 async fn udp_echo_measures_an_added_delay() {
     let delay = Duration::from_millis(25);
