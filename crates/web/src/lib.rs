@@ -118,7 +118,7 @@ async fn targets(State(app): State<App>) -> impl IntoResponse {
         .map(|t| TargetView {
             path: t.path.clone(),
             title: t.title.clone(),
-            probe: format!("{:?}", t.probe).to_lowercase(),
+            probe: t.probe.name().to_string(),
             address: match (&t.url, &t.host, t.port) {
                 (Some(url), _, _) => url.clone(),
                 (None, Some(host), Some(port)) => format!("{host}:{port}"),

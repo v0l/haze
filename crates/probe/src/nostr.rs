@@ -87,11 +87,14 @@ impl Relay {
         started: Instant,
         mut phases: Vec<(&'static str, Duration)>,
     ) -> Result<Reply, ProbeError> {
-        let request = self
+        let mut request = self
             .url
             .as_str()
             .into_client_request()
             .map_err(|e| ProbeError::Failed(e.to_string()))?;
+        if let Ok(agent) = concat!("haze/", env!("CARGO_PKG_VERSION")).parse() {
+            request.headers_mut().insert("user-agent", agent);
+        }
         let before = started.elapsed();
         let (mut socket, _) = tokio_tungstenite::client_async(request, stream)
             .await

@@ -188,8 +188,12 @@ fn main() -> Result<()> {
 }
 
 pub fn load(path: &PathBuf) -> Result<Config> {
-    let text =
-        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let text = std::fs::read_to_string(path).with_context(|| {
+        format!(
+            "reading {} (pass a config path or set HAZE_CONFIG)",
+            path.display()
+        )
+    })?;
     Config::parse(&text).map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))
 }
 
@@ -207,7 +211,7 @@ pub fn describe(config: &Config) -> String {
         out.push_str(&format!(
             "  {:<28} {:<5} {}{} every {}s x{} timeout {}ms",
             t.path,
-            format!("{:?}", t.probe).to_lowercase(),
+            t.probe.name().to_string(),
             what,
             port,
             t.step.as_secs(),
