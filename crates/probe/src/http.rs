@@ -70,6 +70,9 @@ pub struct Http {
     source: Option<IpAddr>,
     tos: Option<u8>,
     tls: TlsConnector,
+    method: &'static str,
+    headers: Vec<(String, String)>,
+    body: Vec<u8>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -104,7 +107,25 @@ impl Http {
             source: options.source,
             tos: options.tos,
             tls: tls_connector(),
+            method: "GET",
+            headers: Vec::new(),
+            body: Vec::new(),
         })
+    }
+
+    pub fn post(url: &str, headers: Vec<(String, String)>, body: Vec<u8>) -> Result<Http, String> {
+        let mut http = Http::new(
+            url,
+            None,
+            &SocketOptions {
+                source: None,
+                tos: None,
+            },
+        )?;
+        http.method = "POST";
+        http.headers = headers;
+        http.body = body;
+        Ok(http)
     }
 
     pub async fn fetch(&self) -> Result<HttpTiming, ProbeError> {
@@ -154,15 +175,22 @@ impl Http {
         } else {
             self.url.host.clone()
         };
-        let request = format!(
-            "GET {} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: haze/{}\r\nAccept: */*\r\nConnection: close\r\n\r\n",
+        let mut request = format!(
+            "{} {} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: haze/{}\r\nAccept: */*\r\nConnection: close\r\n",
+            self.method,
             self.url.path,
             env!("CARGO_PKG_VERSION"),
         );
-        stream
-            .write_all(request.as_bytes())
-            .await
-            .map_err(failure)?;
+        for (name, value) in &self.headers {
+            request.push_str(&format!("{name}: {value}\r\n"));
+        }
+        if self.method != "GET" {
+            request.push_str(&format!("Content-Length: {}\r\n", self.body.len()));
+        }
+        request.push_str("\r\n");
+        let mut request = request.into_bytes();
+        request.extend_from_slice(&self.body);
+        stream.write_all(&request).await.map_err(failure)?;
         let mut body = Vec::with_capacity(16 * 1024);
         let mut buf = [0u8; 16 * 1024];
         let first = stream.read(&mut buf).await.map_err(failure)?;

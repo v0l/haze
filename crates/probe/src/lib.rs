@@ -1,8 +1,10 @@
 pub mod correlate;
+pub mod dns;
 pub mod http;
 #[cfg(unix)]
 pub mod icmp;
 pub mod net;
+pub mod nostr;
 pub mod tcp;
 pub mod udp;
 
@@ -60,6 +62,18 @@ pub async fn build(target: &Target) -> Result<Arc<dyn Probe>, String> {
             target.url.as_deref().unwrap_or_default(),
             target.family,
             &options,
+        )?),
+        ProbeKind::Nostr => Arc::new(nostr::Relay::new(
+            target.url.as_deref().unwrap_or_default(),
+            target.event.as_deref(),
+            target.family,
+            &options,
+        )?),
+        ProbeKind::Dns => Arc::new(dns::Dns::new(
+            SocketAddr::new(address().await?, target.port.unwrap_or(53)),
+            target.name.as_deref().unwrap_or_default(),
+            target.record.as_deref().unwrap_or("A"),
+            options,
         )?),
     })
 }
