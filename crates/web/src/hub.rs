@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
 pub const HISTORY_FILE: &str = "alerts.jsonl";
+const RESUME_WINDOW_MS: i64 = 86_400_000;
 pub const METRIC_BUCKETS: [f64; 20] = [
     5e-05, 0.0001, 0.0002, 0.0004, 0.0008, 0.0016, 0.0032, 0.0064, 0.0128, 0.0256, 0.0512, 0.1024,
     0.2048, 0.4096, 0.8192, 1.6384, 3.2768, 6.5536, 13.1072, 26.2144,
@@ -173,11 +174,19 @@ impl Hub {
                 history.push(record);
             }
         }
-        let live = config
+        let mut live: BTreeMap<String, Live> = config
             .targets
             .iter()
             .map(|t| (t.path.clone(), Live::default()))
             .collect();
+        if let Ok(store) = haze_store::Store::open(&config.storage_dir) {
+            for (path, entry) in live.iter_mut() {
+                let recent = store.steps(path, now_ms - RESUME_WINDOW_MS, now_ms + 1);
+                if let Some(step) = recent.ok().and_then(|s| s.into_iter().last()) {
+                    entry.last = Some(LastStep::of(&step, &step.summary()));
+                }
+            }
+        }
         let (events, _) = broadcast::channel(256);
         Ok(Hub {
             config,
@@ -427,6 +436,36 @@ mod tests {
             ("b", None, true)
         );
         assert_eq!((list[2].started_ms, list[2].ended_ms), (1, Some(3)));
+    }
+
+    #[test]
+    fn the_last_stored_step_is_known_after_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let text = format!(
+            "[storage]\ndir = \"{}\"\n[targets.a]\nhost = \"192.0.2.1\"\n[targets.b]\nhost = \"192.0.2.2\"\n[targets.old]\nhost = \"192.0.2.3\"",
+            dir.path().display()
+        );
+        let config = Config::parse(&text).unwrap();
+        let now = 1_790_000_000_000;
+        let step = |start_ms, lost: bool| Step {
+            start_ms,
+            step_ms: 60_000,
+            rtts: vec![(!lost).then(|| Duration::from_millis(5)); 4],
+            duplicates: 0,
+            reordered: 0,
+        };
+        let mut store = haze_store::Store::open(dir.path()).unwrap();
+        store.append("a", &step(now - 180_000, true)).unwrap();
+        store.append("a", &step(now - 120_000, false)).unwrap();
+        store.append("b", &step(now - 120_000, true)).unwrap();
+        store
+            .append("old", &step(now - 3 * 86_400_000, false))
+            .unwrap();
+        let hub = Hub::new(config, dir.path(), now).unwrap();
+        assert_eq!(hub.status("a"), "ok");
+        assert_eq!(hub.last("a").unwrap().at_ms, now - 120_000);
+        assert_eq!(hub.status("b"), "down");
+        assert_eq!(hub.status("old"), "unknown");
     }
 
     #[test]

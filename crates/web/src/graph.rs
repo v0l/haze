@@ -5,9 +5,9 @@ use haze_store::{Bucket, Store};
 use serde::Serialize;
 
 pub const MAX_COMPARE: usize = 6;
-const STEPS: [i64; 13] = [
-    5_000, 60_000, 120_000, 300_000, 600_000, 900_000, 1_800_000, 3_600_000, 7_200_000, 10_800_000,
-    21_600_000, 43_200_000, 86_400_000,
+const STEPS: [i64; 16] = [
+    5_000, 10_000, 15_000, 30_000, 60_000, 120_000, 300_000, 600_000, 900_000, 1_800_000,
+    3_600_000, 7_200_000, 10_800_000, 21_600_000, 43_200_000, 86_400_000,
 ];
 const COMPARE_COLOURS: [&str; MAX_COMPARE] = [
     "#4cc9f0", "#f72585", "#ffd166", "#80ed99", "#b388ff", "#ff9e40",
@@ -209,10 +209,12 @@ fn y_scale<'a>(points: impl Iterator<Item = &'a Point>) -> f64 {
 fn label_ms(v: f64) -> String {
     if v >= 1000.0 {
         format!("{:.1}s", v / 1000.0)
-    } else if v >= 10.0 || v == 0.0 {
+    } else if v.fract() == 0.0 {
         format!("{v:.0}")
-    } else {
+    } else if v >= 10.0 || (v * 10.0).fract() == 0.0 {
         format!("{v:.1}")
+    } else {
+        format!("{v:.2}")
     }
 }
 
@@ -527,6 +529,7 @@ mod tests {
         assert_eq!(choose_step(30 * 86_400_000, 900, 60_000), 7_200_000);
         assert_eq!(choose_step(400 * 86_400_000, 900, 60_000), 86_400_000);
         assert_eq!(choose_step(600_000, 900, 5_000), 5_000);
+        assert_eq!(choose_step(16 * 60_000, 1140, 15_000), 15_000);
     }
 
     #[test]
@@ -556,6 +559,16 @@ mod tests {
         let mut points: Vec<Point> = (0..200).map(|_| point(6.0)).collect();
         points.push(point(900.0));
         assert_eq!(y_scale(points.iter()), 10.0);
+    }
+
+    #[test]
+    fn axis_labels_keep_quarter_steps() {
+        assert_eq!(label_ms(12.5), "12.5");
+        assert_eq!(label_ms(37.5), "37.5");
+        assert_eq!(label_ms(50.0), "50");
+        assert_eq!(label_ms(0.625), "0.62");
+        assert_eq!(label_ms(2.5), "2.5");
+        assert_eq!(label_ms(1500.0), "1.5s");
     }
 
     #[test]

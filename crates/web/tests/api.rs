@@ -129,7 +129,8 @@ async fn targets_list_the_config_with_live_status() {
     let list = data["targets"].as_array().unwrap();
     let paths: Vec<&str> = list.iter().map(|t| t["path"].as_str().unwrap()).collect();
     assert_eq!(paths, ["dns/one", "dns/two", "web/site"]);
-    assert_eq!(list[0]["status"], "unknown");
+    let status: Vec<&str> = list.iter().map(|t| t["status"].as_str().unwrap()).collect();
+    assert_eq!(status, ["ok", "down", "unknown"], "restored from the store");
     assert_eq!(list[0]["tags"], serde_json::json!(["dns"]));
     assert_eq!(list[2]["probe"], "http");
 

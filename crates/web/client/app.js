@@ -38,13 +38,14 @@ const el = (tag, attrs = {}, ...children) => {
 };
 
 const theme = () => document.documentElement.dataset.theme;
+const render = (...nodes) => view.replaceChildren(...nodes.flat().filter((n) => n !== null && n !== undefined && n !== false));
 const tz = () => new Date().getTimezoneOffset();
 const encodePath = (path) => path.split("/").map(encodeURIComponent).join("/");
 const fmt = (v) => (v === null || v === undefined ? "-" : v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2));
 const pct = (v) => (v === null || v === undefined ? "-" : `${(v * 100).toFixed(v > 0 && v < 0.1 ? 1 : 0)}%`);
 
 function window_() {
-  const to = state.range.to ?? Date.now();
+  const to = state.range.to ?? state.frozenNow ?? Date.now();
   return { from: Math.round(to - state.range.span), to: Math.round(to) };
 }
 
@@ -65,6 +66,8 @@ function ago(ms) {
 }
 
 function duration(ms) {
+  const s = Math.round(ms / 1000);
+  if (s < 90) return `${s}s`;
   const m = Math.round(ms / 60e3);
   if (m < 60) return `${m}m`;
   if (m < 2880) return `${Math.floor(m / 60)}h ${m % 60}m`;
@@ -336,7 +339,11 @@ function makeGraph({ target, targets, height = 260, small = false, onclick, lege
 let redrawTimer = null;
 function redrawGraphs() {
   clearTimeout(redrawTimer);
-  redrawTimer = setTimeout(() => state.graphs.forEach((g) => g.draw()), 30);
+  redrawTimer = setTimeout(() => {
+    state.frozenNow = Date.now();
+    state.graphs.forEach((g) => g.draw());
+    state.frozenNow = null;
+  }, 30);
 }
 
 function statusDot(status, title) {
@@ -374,6 +381,16 @@ function worst(node) {
   return best;
 }
 
+function rowStat(last) {
+  return [last ? `${fmt(last.median_ms)} ms` : "-", el("span", { class: "muted" }, last ? ` ${pct(last.loss)}` : "")];
+}
+
+function summaryPills(targets) {
+  const counts = {};
+  for (const t of targets) counts[t.status] = (counts[t.status] || 0) + 1;
+  return ["down", "alert", "loss", "ok", "unknown"].filter((s) => counts[s]).map((s) => el("span", { class: "pill" }, statusDot(s), `${counts[s]} ${s}`));
+}
+
 function targetRow(t) {
   const last = t.last;
   const row = el(
@@ -387,7 +404,7 @@ function targetRow(t) {
       el("span", { class: "muted small address" }, `${t.probe} ${t.address}`),
     ),
     el("span", { class: "tags" }, tagChips(t.tags, state.tag)),
-    el("span", { class: "stat small" }, last ? `${fmt(last.median_ms)} ms` : "-", el("span", { class: "muted" }, last ? ` ${pct(last.loss)}` : "")),
+    el("span", { class: "stat small" }, rowStat(last)),
   );
   const spark = makeGraph({ target: t.path, height: 34, small: true, onclick: () => (location.hash = `#/t/${encodePath(t.path)}?${rangeQuery()}`) });
   row.append(spark.box);
@@ -406,14 +423,8 @@ async function treePage() {
   const targets = await loadTargets();
   const tags = [...new Set(targets.flatMap((t) => t.tags))].sort();
   const shown = state.tag ? targets.filter((t) => t.tags.includes(state.tag)) : targets;
-  const counts = {};
-  for (const t of targets) counts[t.status] = (counts[t.status] || 0) + 1;
-  const summary = el(
-    "div",
-    { class: "summary" },
-    ["down", "alert", "loss", "ok", "unknown"].filter((s) => counts[s]).map((s) => el("span", { class: "pill" }, statusDot(s), `${counts[s]} ${s}`)),
-  );
-  view.replaceChildren(
+  const summary = el("div", { class: "summary" }, summaryPills(targets));
+  render(
     el("div", { class: "head" }, el("h1", {}, "Targets"), summary),
     rangeBar(),
     tags.length ? el("div", { class: "tagbar" }, el("span", { class: "muted small" }, "Tags"), tagChips(tags, state.tag)) : null,
@@ -469,7 +480,7 @@ async function targetPage(path) {
   const targets = await loadTargets();
   const t = targets.find((x) => x.path === path);
   if (!t) {
-    view.replaceChildren(el("h1", {}, path), el("p", { class: "error" }, "This target is not in the config."), el("a", { href: "#/" }, "Back to targets"));
+    render(el("h1", {}, path), el("p", { class: "error" }, "This target is not in the config."), el("a", { href: "#/" }, "Back to targets"));
     return;
   }
   const graph = makeGraph({ target: path, height: Math.min(320, Math.max(200, Math.round(window.innerHeight * 0.38))) });
@@ -483,7 +494,7 @@ async function targetPage(path) {
   );
   const alerts = await json(`/api/alerts?target=${encodeURIComponent(path)}`);
   const crumbs = path.split("/");
-  view.replaceChildren(
+  render(
     el(
       "div",
       { class: "head" },
@@ -535,7 +546,7 @@ async function comparePage() {
       );
     }),
   );
-  view.replaceChildren(
+  render(
     el("div", { class: "head" }, el("h1", {}, "Compare")),
     rangeBar(),
     state.compare.length ? el("section", { class: "card" }, graph.box, legendBox, graph.info) : el("p", { class: "muted" }, "Pick a target."),
@@ -547,7 +558,7 @@ async function comparePage() {
 
 async function incidentsPage() {
   const data = await json("/api/alerts");
-  view.replaceChildren(
+  render(
     el("div", { class: "head" }, el("h1", {}, "Incidents"), el("span", { class: "muted small" }, `${data.incidents.filter((i) => !i.ended_ms).length} active`)),
     el("section", { class: "card" }, incidentTable(data.incidents)),
     el(
@@ -574,7 +585,7 @@ async function route() {
     else if (state.route.page === "incidents") await incidentsPage();
     else await treePage();
   } catch (error) {
-    view.replaceChildren(el("p", { class: "error" }, `Could not load: ${error.message}`));
+    render(el("p", { class: "error" }, `Could not load: ${error.message}`));
   }
 }
 
@@ -584,10 +595,17 @@ function applyUpdate(update) {
     t.status = update.status;
     if (update.last) t.last = update.last;
   }
-  document.querySelectorAll(`[data-target="${CSS.escape(update.target)}"] .dot`).forEach((d) => {
-    d.className = `dot ${update.status}`;
-    d.title = update.status;
+  document.querySelectorAll(`[data-target="${CSS.escape(update.target)}"]`).forEach((row) => {
+    const dot = row.querySelector(".dot");
+    if (dot) {
+      dot.className = `dot ${update.status}`;
+      dot.title = update.status;
+    }
+    const stat = row.querySelector(".stat");
+    if (stat && update.last) stat.replaceChildren(...rowStat(update.last));
   });
+  const summary = document.querySelector(".summary");
+  if (summary) summary.replaceChildren(...summaryPills(state.targets));
   const page = state.route?.page;
   if (update.kind === "alert" && page === "incidents") {
     route();
@@ -642,5 +660,5 @@ setInterval(() => {
 }, 30e3);
 
 syncThemeButton();
-connect();
+if (!new URLSearchParams(location.search).has("static")) connect();
 route();
