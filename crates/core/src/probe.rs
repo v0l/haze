@@ -22,6 +22,7 @@ impl Reply {
 #[derive(Clone, Debug, PartialEq)]
 pub enum ProbeError {
     Timeout,
+    Refused(u16),
     Failed(String),
 }
 
@@ -29,6 +30,7 @@ impl std::fmt::Display for ProbeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ProbeError::Timeout => write!(f, "timed out"),
+            ProbeError::Refused(status) => write!(f, "refused with HTTP {status}"),
             ProbeError::Failed(why) => write!(f, "{why}"),
         }
     }

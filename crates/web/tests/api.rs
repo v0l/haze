@@ -49,6 +49,7 @@ fn step(start_ms: i64, base_ms: u64, lost: usize) -> Step {
             .collect(),
         duplicates: 0,
         reordered: 0,
+        refused: 0,
     }
 }
 

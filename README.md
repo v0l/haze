@@ -110,6 +110,9 @@ comment = "sustained packet loss"
 [alerts.slow]
 when = "median > 2x baseline 3 of 5"
 
+[alerts.refused]
+when = "refused >= 1 for 3 steps"
+
 [targets.ping]
 tags = ["icmp"]
 alerts = ["loss", "slow"]
@@ -150,7 +153,9 @@ starting with `wss://` or `ws://` the nostr probe.
 
 - The **nostr** probe connects to the relay, sends a `REQ` for one event id with `limit 1` and
   times the first `EVENT` or `EOSE`. Set `event` to a 64 character hex id to ask for a known
-  event; the default is an id no relay holds, so the answer is `EOSE`.
+  event; the default is an id no relay holds, so the answer is `EOSE`. A relay that answers
+  the WebSocket upgrade with an HTTP error is recorded as `refused` with that status, kept
+  apart from loss.
 - The **dns** probe asks the server in `host` (port 53 unless `port` is set) for `name` with
   `record` (`A`, `AAAA`, `NS`, `MX`, `TXT`, `SOA` or `CNAME`; `A` by default) and times the
   answer. NXDOMAIN counts as an answer; SERVFAIL and REFUSED count as lost.
@@ -158,6 +163,8 @@ starting with `wss://` or `ws://` the nostr probe.
 Alert rules: a metric (`loss`, `min`, `median`, `mean`, `max`, `p10` to `p99`, `jitter`,
 `smoke`), a comparison and a threshold in ms, % or `Nx baseline`, then an optional window
 (`for 3 steps`, `3 of 5`). SmokePing patterns work too: `loss pattern ==0%,==0%,>20%,>20%`.
+`refused` counts the pings a server turned away in a step and takes a plain count:
+`refused >= 1 for 3 steps`.
 
 Notifications go to every `[[notify]]` route whose `tags` match the target, or to every route
 with no `tags`. `webhook` posts JSON (`target`, `alert`, `event`, `at_ms`, `text`, `comment`,

@@ -101,6 +101,7 @@ h2 { font-size: 15px; margin: 0 0 10px; color: var(--muted); font-weight: 600; }
 .dot.ok { background: var(--ok); }
 .dot.loss { background: var(--loss); }
 .dot.alert { background: var(--alert); }
+.dot.refused { background: var(--alert); box-shadow: 0 0 6px var(--alert); }
 .dot.down { background: var(--down); box-shadow: 0 0 6px var(--down); }
 
 .ranges { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin: 0 0 14px; }
@@ -175,6 +176,7 @@ h2 { font-size: 15px; margin: 0 0 10px; color: var(--muted); font-weight: 600; }
 .swatch.smoke { background: var(--smoke); opacity: 0.45; }
 .swatch.median { background: var(--ok); height: 3px; }
 .swatch.down { background: var(--down); opacity: 0.4; }
+.swatch.refused { background: var(--alert); opacity: 0.4; }
 .exports { display: flex; gap: 14px; margin-top: 10px; }
 
 .stats { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }

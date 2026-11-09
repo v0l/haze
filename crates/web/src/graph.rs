@@ -19,6 +19,7 @@ pub struct Point {
     pub steps: u32,
     pub sent: u64,
     pub received: u64,
+    pub refused: u64,
     pub loss: f64,
     pub min: Option<f64>,
     pub p10: Option<f64>,
@@ -92,6 +93,7 @@ struct Palette {
     text: &'static str,
     smoke: &'static str,
     down: &'static str,
+    refused: &'static str,
 }
 
 impl Theme {
@@ -110,6 +112,7 @@ impl Theme {
                 text: "#9aa5b5",
                 smoke: "#c8d0dc",
                 down: "#ff3b3b",
+                refused: "#ffb000",
             },
             Theme::Light => Palette {
                 background: "#ffffff",
@@ -117,6 +120,7 @@ impl Theme {
                 text: "#4a5462",
                 smoke: "#36404d",
                 down: "#e00000",
+                refused: "#c27c00",
             },
         }
     }
@@ -139,6 +143,7 @@ fn point_of(bucket: &Bucket) -> Point {
         steps: bucket.steps,
         sent: bucket.sent,
         received: bucket.received,
+        refused: bucket.refused,
         loss: (bucket.loss() * 1e4).round() / 1e4,
         min: crate::hub::ms(h.min()),
         p10: q(0.10),
@@ -374,10 +379,14 @@ pub fn smoke_svg(series: &Series, options: &GraphOptions) -> String {
     for p in &series.points {
         let (x, w) = bucket_span(&plot, p.t, series.step);
         if p.sent > 0 && p.received == 0 {
+            let colour = if p.refused >= p.sent {
+                palette.refused
+            } else {
+                palette.down
+            };
             let _ = write!(
                 out,
-                r#"<rect x="{x:.1}" y="{top}" width="{w:.1}" height="{height}" fill="{c}" fill-opacity="0.22"/>"#,
-                c = palette.down
+                r#"<rect x="{x:.1}" y="{top}" width="{w:.1}" height="{height}" fill="{colour}" fill-opacity="0.22"/>"#
             );
             continue;
         }
@@ -547,6 +556,7 @@ mod tests {
             steps: 1,
             sent: 20,
             received: 20,
+            refused: 0,
             loss: 0.0,
             min: Some(1.0),
             p10: Some(1.0),

@@ -39,6 +39,7 @@ fn fill(store: &mut Store, target: &str, days: i64, step_ms: i64, seed: u64) -> 
             rtts: (0..20).map(|_| rng.rtt()).collect(),
             duplicates: 0,
             reordered: 0,
+            refused: 0,
         };
         store.append(target, &step).unwrap();
         steps.push(step);
@@ -156,6 +157,7 @@ fn appending_to_a_rolled_up_day_drops_its_rollup() {
         rtts: vec![Some(Duration::from_millis(500))],
         duplicates: 0,
         reordered: 0,
+        refused: 0,
     };
     let mut store = Store::open(dir.path()).unwrap();
     store.append("t", &late).unwrap();

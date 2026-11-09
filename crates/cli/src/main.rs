@@ -297,10 +297,15 @@ fn show(dir: &PathBuf, last: Duration, only: Option<&str>) -> Result<()> {
         let h = &b.histogram;
         let ms = |d: Option<Duration>| d.map(format_ms).unwrap_or_else(|| "-".into());
         println!(
-            "{target:<28} {:>4} steps {:>6} pings loss {:>5.1}% min {} p10 {} med {} p90 {} max {} ms",
+            "{target:<28} {:>4} steps {:>6} pings loss {:>5.1}%{} min {} p10 {} med {} p90 {} max {} ms",
             b.steps,
             b.sent,
             b.loss() * 100.0,
+            if b.refused > 0 {
+                format!(" refused {}", b.refused)
+            } else {
+                String::new()
+            },
             ms(h.min()),
             ms(h.quantile(0.1)),
             ms(h.quantile(0.5)),

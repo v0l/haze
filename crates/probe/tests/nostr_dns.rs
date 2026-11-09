@@ -219,3 +219,56 @@ async fn dns_silence_is_a_timeout() {
         Err(ProbeError::Timeout)
     );
 }
+
+async fn refusing_relay(status: u16) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            tokio::spawn(async move {
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                let mut buf = [0u8; 4096];
+                let _ = stream.read(&mut buf).await;
+                let reply = format!(
+                    "HTTP/1.1 {status} Nope\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+                );
+                let _ = stream.write_all(reply.as_bytes()).await;
+            });
+        }
+    });
+    format!("ws://{address}/")
+}
+
+#[tokio::test]
+async fn nostr_refusal_is_not_a_timeout_and_is_counted_apart_from_loss() {
+    use haze_probe::Sampler;
+    let url = refusing_relay(503).await;
+    let relay = Relay::new(&url, None, None, &NONE).unwrap();
+    assert_eq!(
+        relay.probe(0, Duration::from_secs(2)).await,
+        Err(ProbeError::Refused(503))
+    );
+    let sampler = Sampler::new(Arc::new(relay));
+    let (step, detail) = sampler
+        .step(3, Duration::from_millis(30), Duration::from_secs(2))
+        .await;
+    assert_eq!((step.refused, detail.refusals.len()), (3, 3));
+    assert_eq!(step.summary().loss, 0.0);
+
+    let (url, _) = fake_relay(Behaviour::Silent, Duration::ZERO).await;
+    let silent = Relay::new(&url, None, None, &NONE).unwrap();
+    let sampler = Sampler::new(Arc::new(silent));
+    let (step, detail) = sampler
+        .step(2, Duration::from_millis(30), Duration::from_millis(200))
+        .await;
+    assert_eq!((step.refused, detail.refusals.len()), (0, 0));
+    assert_eq!(step.summary().loss, 1.0);
+
+    let url = refusing_relay(400).await;
+    let relay = Relay::new(&url, None, None, &NONE).unwrap();
+    assert_eq!(
+        relay.probe(0, Duration::from_secs(2)).await,
+        Err(ProbeError::Refused(400))
+    );
+}

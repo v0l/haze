@@ -9,6 +9,7 @@ pub const DEFAULT_BASELINE_STEPS: usize = 288;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Metric {
     Loss,
+    Refused,
     Min,
     Mean,
     Median,
@@ -91,6 +92,7 @@ fn parse_op(text: &str) -> Option<(Op, &str)> {
 fn parse_metric(word: &str) -> Result<Metric, String> {
     Ok(match word {
         "loss" => Metric::Loss,
+        "refused" => Metric::Refused,
         "min" => Metric::Min,
         "mean" | "avg" => Metric::Mean,
         "median" | "med" => Metric::Median,
@@ -130,6 +132,12 @@ fn parse_threshold(text: &str, metric: Metric) -> Result<Threshold, String> {
     }
     if metric == Metric::Loss {
         return Err(format!("loss takes a percentage like 10%, not `{text}`"));
+    }
+    if metric == Metric::Refused {
+        let count: u32 = text
+            .parse()
+            .map_err(|_| format!("refused takes a count like 1, not `{text}`"))?;
+        return Ok(Threshold::Millis(count as f64));
     }
     let value = parse_duration(text)?;
     Ok(Threshold::Millis(value.as_secs_f64() * 1e3))
@@ -248,6 +256,7 @@ pub fn metric_ms(summary: &Summary, metric: Metric) -> Option<f64> {
     let ms = |d: Option<Duration>| d.map(|d| d.as_secs_f64() * 1e3);
     match metric {
         Metric::Loss => Some(summary.loss * 100.0),
+        Metric::Refused => Some(summary.refused as f64),
         Metric::Min => ms(summary.min),
         Metric::Mean => ms(summary.mean),
         Metric::Median => ms(summary.median),
@@ -457,6 +466,7 @@ mod tests {
         Summary {
             sent: 20,
             received: (20.0 * (1.0 - loss)) as u32,
+            refused: 0,
             loss,
             min: d,
             p10: d,
@@ -553,6 +563,24 @@ mod tests {
         ] {
             assert!(bad.parse::<Matcher>().is_err(), "{bad} should not parse");
         }
+    }
+
+    #[test]
+    fn refused_rule_counts_refusals_and_loss_rule_ignores_them() {
+        let refused = |n: u32| Summary {
+            sent: 5,
+            received: 0,
+            refused: n,
+            loss: if n == 5 { 0.0 } else { 1.0 },
+            ..step(0.0, None)
+        };
+        let series = vec![refused(5), refused(5), refused(5)];
+        assert!(m("refused >= 1 for 3 steps").matches(&series));
+        assert!(!m("loss >= 10% for 3 steps").matches(&series));
+        let silent = vec![refused(0), refused(0), refused(0)];
+        assert!(!m("refused >= 1 for 3 steps").matches(&silent));
+        assert!(m("loss >= 10% for 3 steps").matches(&silent));
+        assert!("refused >= 10%".parse::<Matcher>().is_err());
     }
 
     #[test]

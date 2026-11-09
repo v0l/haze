@@ -288,6 +288,7 @@ depends = ["router"]
             rtts,
             duplicates: 0,
             reordered: 0,
+            refused: 0,
         }
         .summary()
     }

@@ -1,9 +1,10 @@
-export type Status = "ok" | "loss" | "alert" | "down" | "unknown";
+export type Status = "ok" | "loss" | "alert" | "refused" | "down" | "unknown";
 
 export interface LastStep {
   at_ms: number;
   sent: number;
   received: number;
+  refused: number;
   loss: number;
   min_ms: number | null;
   median_ms: number | null;
@@ -37,6 +38,7 @@ export interface Point {
   steps: number;
   sent: number;
   received: number;
+  refused: number;
   loss: number;
   min: number | null;
   p10: number | null;

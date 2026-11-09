@@ -10,7 +10,7 @@ const DAY_MS: i64 = 86_400_000;
 const HOUR_MS: i64 = 3_600_000;
 const ROLLUP_EXTENSION: &str = "hzr";
 const LOST: u32 = u32::MAX;
-const FIXED: usize = 8 + 4 + 2 + 2 + 2;
+const FIXED: usize = 8 + 4 + 2 + 2 + 2 + 2;
 const EXTENSION: &str = "haze";
 
 pub struct Store {
@@ -24,16 +24,18 @@ pub struct Bucket {
     pub steps: u32,
     pub sent: u64,
     pub received: u64,
+    pub refused: u64,
     pub duplicates: u64,
     pub histogram: Histogram,
 }
 
 impl Bucket {
     pub fn loss(&self) -> f64 {
-        if self.sent == 0 {
+        let answerable = self.sent.saturating_sub(self.refused);
+        if answerable == 0 {
             0.0
         } else {
-            1.0 - self.received as f64 / self.sent as f64
+            1.0 - self.received as f64 / answerable as f64
         }
     }
 }
@@ -43,6 +45,7 @@ impl Bucket {
         self.steps += other.steps;
         self.sent += other.sent;
         self.received += other.received;
+        self.refused += other.refused;
         self.duplicates += other.duplicates;
         self.histogram.merge(&other.histogram);
     }
@@ -52,24 +55,26 @@ impl Bucket {
         out.extend_from_slice(&self.steps.to_le_bytes());
         out.extend_from_slice(&self.sent.to_le_bytes());
         out.extend_from_slice(&self.received.to_le_bytes());
+        out.extend_from_slice(&self.refused.to_le_bytes());
         out.extend_from_slice(&self.duplicates.to_le_bytes());
         self.histogram.encode(out);
     }
 
     fn decode(bytes: &[u8]) -> Option<(Bucket, usize)> {
-        let head = bytes.get(..36)?;
+        let head = bytes.get(..44)?;
         let u64_at = |at: usize| u64::from_le_bytes(head[at..at + 8].try_into().unwrap());
-        let (histogram, used) = Histogram::decode(&bytes[36..])?;
+        let (histogram, used) = Histogram::decode(&bytes[44..])?;
         Some((
             Bucket {
                 start_ms: u64_at(0) as i64,
                 steps: u32::from_le_bytes(head[8..12].try_into().unwrap()),
                 sent: u64_at(12),
                 received: u64_at(20),
-                duplicates: u64_at(28),
+                refused: u64_at(28),
+                duplicates: u64_at(36),
                 histogram,
             },
-            36 + used,
+            44 + used,
         ))
     }
 }
@@ -123,6 +128,7 @@ fn bucket_of_step(step: &Step) -> Bucket {
         steps: 1,
         sent: step.sent() as u64,
         received: step.received() as u64,
+        refused: step.refused as u64,
         duplicates: step.duplicates as u64,
         histogram: step.histogram(),
     }
@@ -164,6 +170,7 @@ pub fn encode(step: &Step) -> Vec<u8> {
     payload.extend_from_slice(&(step.rtts.len() as u16).to_le_bytes());
     payload.extend_from_slice(&(step.duplicates.min(u16::MAX as u32) as u16).to_le_bytes());
     payload.extend_from_slice(&(step.reordered.min(u16::MAX as u32) as u16).to_le_bytes());
+    payload.extend_from_slice(&(step.refused.min(u16::MAX as u32) as u16).to_le_bytes());
     for rtt in &step.rtts {
         let us = rtt
             .map(|r| r.as_micros().min(LOST as u128 - 1) as u32)
@@ -201,6 +208,7 @@ fn decode(payload: &[u8]) -> Option<Step> {
         rtts,
         duplicates: u16_at(14) as u32,
         reordered: u16_at(16) as u32,
+        refused: u16_at(18) as u32,
     })
 }
 

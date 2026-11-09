@@ -77,6 +77,8 @@ export function TargetPage({ path }: { path: string }) {
           median, coloured by loss
           <span class="swatch down" />
           all lost
+          <span class="swatch refused" />
+          all refused
         </div>
         <div class="exports small">
           <a href="#" onClick={open(svgUrl)}>

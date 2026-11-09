@@ -11,6 +11,7 @@ export function LastStepTable({ last }: { last: LastStep | null }) {
     ["max", fmt(last.max_ms), true],
     ["jitter", fmt(last.jitter_ms), true],
     ["loss", pct(last.loss), false],
+    ["refused", String(last.refused), false],
   ];
   return (
     <div class="stats">
@@ -23,7 +24,7 @@ export function LastStepTable({ last }: { last: LastStep | null }) {
           </b>
         </div>
       ))}
-      <div class="muted small when">{`last step ${ago(last.at_ms)}, ${last.received} of ${last.sent} replies`}</div>
+      <div class="muted small when">{`last step ${ago(last.at_ms)}, ${last.received} of ${last.sent} replies${last.refused ? `, ${last.refused} refused by the server` : ""}`}</div>
     </div>
   );
 }

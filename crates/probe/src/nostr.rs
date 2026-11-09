@@ -98,7 +98,7 @@ impl Relay {
         let before = started.elapsed();
         let (mut socket, _) = tokio_tungstenite::client_async(request, stream)
             .await
-            .map_err(|e| ProbeError::Failed(format!("WebSocket: {e}")))?;
+            .map_err(upgrade_failure)?;
         let upgraded = started.elapsed();
         phases.push(("upgrade", upgraded - before));
         let subscription = format!("haze-{:016x}", random_u64());
@@ -168,6 +168,15 @@ impl Relay {
             .map_err(|e| ProbeError::Failed(format!("TLS: {e}")))?;
         phases.push(("tls", started.elapsed() - connected));
         self.exchange(stream, started, phases).await
+    }
+}
+
+fn upgrade_failure(error: tokio_tungstenite::tungstenite::Error) -> ProbeError {
+    match error {
+        tokio_tungstenite::tungstenite::Error::Http(response) => {
+            ProbeError::Refused(response.status().as_u16())
+        }
+        other => ProbeError::Failed(format!("WebSocket: {other}")),
     }
 }
 

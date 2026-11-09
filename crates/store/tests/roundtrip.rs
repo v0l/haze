@@ -19,6 +19,7 @@ fn step(start_ms: i64, base_us: u64) -> Step {
         rtts,
         duplicates: 1,
         reordered: 2,
+        refused: 0,
     }
 }
 
@@ -159,4 +160,19 @@ fn rejects_target_paths_outside_the_store() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = Store::open(dir.path()).unwrap();
     assert!(store.append("../escape", &step(T0, 1)).is_err());
+}
+
+#[test]
+fn refusals_survive_storage_and_stay_out_of_loss() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut refused = step(T0, 1_000);
+    refused.rtts = vec![None; 4];
+    refused.refused = 4;
+    let mut store = Store::open(dir.path()).unwrap();
+    store.append("nostr/refusing", &refused).unwrap();
+    store.sync().unwrap();
+    assert_eq!(store.steps("nostr/refusing", T0, T0 + DAY).unwrap(), [refused]);
+    let buckets = store.query("nostr/refusing", T0, T0 + DAY, DAY).unwrap();
+    assert_eq!((buckets[0].sent, buckets[0].refused), (4, 4));
+    assert_eq!(buckets[0].loss(), 0.0);
 }

@@ -36,11 +36,12 @@ function plotOf(svg: SVGSVGElement): Plot {
 function Readout({ point, label }: { point: Point | null | undefined; label: string | null }) {
   if (!point) return <div class="muted">{label ? `${label}: no data` : "no data"}</div>;
   const lost = point.sent > 0 && point.received === 0;
+  const refused = lost && point.refused >= point.sent;
   return (
     <div>
       {label ? <b>{label} </b> : null}
       <span class="muted">{stamp(point.t)} </span>
-      {lost ? <span class="bad">all lost </span> : null}
+      {refused ? <span class="bad">all refused </span> : lost ? <span class="bad">all lost </span> : null}
       {`min ${fmt(point.min)} med ${fmt(point.median)} p90 ${fmt(point.p90)} max ${fmt(point.max)} ms, loss ${pct(point.loss)} (${point.received}/${point.sent})`}
     </div>
   );

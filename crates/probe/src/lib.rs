@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use haze_core::sample::count_reordered;
-use haze_core::{Probe, ProbeKind, Reply, Step, Target};
+use haze_core::{Probe, ProbeError, ProbeKind, Reply, Step, Target};
 use tokio::task::JoinSet;
 
 pub use net::SocketOptions;
@@ -86,6 +86,7 @@ pub struct Sampler {
 #[derive(Debug, Default)]
 pub struct StepDetail {
     pub errors: Vec<(u16, String)>,
+    pub refusals: Vec<(u16, u16)>,
     pub last_reply: Option<Reply>,
 }
 
@@ -134,7 +135,12 @@ impl Sampler {
                     arrivals.push((index as u16, sent + reply.rtt));
                     detail.last_reply = Some(reply);
                 }
-                Err(e) => detail.errors.push((seq, e.to_string())),
+                Err(e) => {
+                    if let ProbeError::Refused(status) = e {
+                        detail.refusals.push((seq, status));
+                    }
+                    detail.errors.push((seq, e.to_string()));
+                }
             }
         }
         let step = Step {
@@ -143,6 +149,7 @@ impl Sampler {
             rtts,
             duplicates: (self.probe.duplicates() - duplicates_before) as u32,
             reordered: count_reordered(&arrivals),
+            refused: detail.refusals.len() as u32,
         };
         (step, detail)
     }

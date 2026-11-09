@@ -44,6 +44,7 @@ pub struct LastStep {
     pub at_ms: i64,
     pub sent: u32,
     pub received: u32,
+    pub refused: u32,
     pub loss: f64,
     pub min_ms: Option<f64>,
     pub median_ms: Option<f64>,
@@ -81,10 +82,10 @@ impl LastStep {
             at_ms: step.start_ms,
             sent: summary.sent,
             received: summary.received,
-            loss: if summary.sent == 0 {
-                0.0
-            } else {
-                (summary.sent - summary.received) as f64 / summary.sent as f64
+            refused: summary.refused,
+            loss: match summary.sent - summary.refused {
+                0 => 0.0,
+                answerable => (answerable - summary.received) as f64 / answerable as f64,
             },
             min_ms: ms(summary.min),
             median_ms: ms(summary.median),
@@ -287,6 +288,7 @@ impl Hub {
         };
         match &entry.last {
             None => "unknown",
+            Some(last) if last.sent > 0 && last.refused == last.sent => "refused",
             Some(last) if last.sent > 0 && last.received == 0 => "down",
             Some(_) if !entry.active.is_empty() => "alert",
             Some(last) if last.loss > 0.0 => "loss",
@@ -453,6 +455,7 @@ mod tests {
             rtts: vec![(!lost).then(|| Duration::from_millis(5)); 4],
             duplicates: 0,
             reordered: 0,
+            refused: 0,
         };
         let mut store = haze_store::Store::open(dir.path()).unwrap();
         store.append("a", &step(now - 180_000, true)).unwrap();
@@ -480,5 +483,24 @@ mod tests {
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].ended_ms, Some(99));
         assert_eq!(list[0].end_reason.as_deref(), Some("haze restarted"));
+    }
+
+    #[test]
+    fn all_refused_is_its_own_status_not_down() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config::parse("[targets.a]\nhost = \"192.0.2.1\"").unwrap();
+        let hub = Hub::new(config, dir.path(), 0).unwrap();
+        let step = |refused| Step {
+            start_ms: 0,
+            step_ms: 60_000,
+            rtts: vec![None; 4],
+            duplicates: 0,
+            reordered: 0,
+            refused,
+        };
+        hub.step_done("a", &step(4));
+        assert_eq!(hub.status("a"), "refused");
+        hub.step_done("a", &step(0));
+        assert_eq!(hub.status("a"), "down");
     }
 }

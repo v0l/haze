@@ -10,12 +10,14 @@ pub struct Step {
     pub rtts: Vec<Option<Duration>>,
     pub duplicates: u32,
     pub reordered: u32,
+    pub refused: u32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Summary {
     pub sent: u32,
     pub received: u32,
+    pub refused: u32,
     pub loss: f64,
     pub min: Option<Duration>,
     pub p10: Option<Duration>,
@@ -59,16 +61,19 @@ impl Step {
         sorted.sort();
         let sent = self.sent();
         let received = sorted.len() as u32;
+        let refused = self.refused.min(sent - received);
+        let answerable = sent - refused;
         let q = |p| exact_quantile(&sorted, p);
         let mean = (!sorted.is_empty()).then(|| sorted.iter().sum::<Duration>() / received);
         let p99 = q(0.99);
         Summary {
             sent,
             received,
-            loss: if sent == 0 {
+            refused,
+            loss: if answerable == 0 {
                 0.0
             } else {
-                1.0 - received as f64 / sent as f64
+                1.0 - received as f64 / answerable as f64
             },
             min: sorted.first().copied(),
             p10: q(0.10),
@@ -171,6 +176,7 @@ mod tests {
             rtts,
             duplicates: 0,
             reordered: 0,
+            refused: 0,
         };
         let s = step.summary();
         assert_eq!((s.sent, s.received), (20, 18));
@@ -190,12 +196,34 @@ mod tests {
             rtts: vec![None; 5],
             duplicates: 0,
             reordered: 0,
+            refused: 0,
         };
         let s = step.summary();
         assert_eq!(s.loss, 1.0);
         assert_eq!(s.median, None);
         assert_eq!(s.jitter, None);
         assert!(smoke_line(&step, Duration::from_millis(10)).contains("loss 100%"));
+    }
+
+    #[test]
+    fn refusals_are_not_loss() {
+        let step = Step {
+            start_ms: 0,
+            step_ms: 60_000,
+            rtts: vec![None; 5],
+            duplicates: 0,
+            reordered: 0,
+            refused: 5,
+        };
+        let s = step.summary();
+        assert_eq!((s.sent, s.received, s.refused), (5, 0, 5));
+        assert_eq!(s.loss, 0.0);
+        let mixed = Step {
+            rtts: vec![ms(1), None, None, None],
+            refused: 2,
+            ..step
+        };
+        assert!((mixed.summary().loss - 0.5).abs() < 1e-9);
     }
 
     #[test]
