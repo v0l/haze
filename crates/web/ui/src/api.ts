@@ -23,7 +23,7 @@ export interface Window {
 }
 
 export interface GraphQuery extends Window {
-  step: number;
+  step?: number;
   width: number;
   height: number;
   theme: string;
@@ -32,7 +32,7 @@ export interface GraphQuery extends Window {
 
 function graphParams(q: GraphQuery): string {
   const tz = new Date().getTimezoneOffset();
-  return `from=${q.from}&to=${q.to}&step=${q.step}&w=${q.width}&h=${q.height}&tz=${tz}&theme=${q.theme}${q.bare ? "&bare=1" : ""}`;
+  return `from=${q.from}&to=${q.to}${q.step ? `&step=${q.step}` : ""}&w=${q.width}&h=${q.height}&tz=${tz}&theme=${q.theme}${q.bare ? "&bare=1" : ""}`;
 }
 
 export const api = {

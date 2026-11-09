@@ -1,9 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
-import { api, type GraphQuery } from "../api";
+import { api } from "../api";
+import { createRefresher, refreshBucket, type GraphSpec } from "../graphLoad";
 import { fmt, pct, pointAt, stamp } from "../format";
-import { RANGES, clampRange, windowOf } from "../route";
+import { RANGES, clampRange } from "../route";
 import { useDash } from "../state";
 import type { Point, Series } from "../types";
+
+const RESIZE_DEBOUNCE = 150;
 
 type HoverListener = (t: number | null) => void;
 const hoverListeners = new Set<HoverListener>();
@@ -66,27 +69,39 @@ export function Graph({ target, targets, height, small = false, onOpen, onDrawn 
     if (!el) return;
     const measure = () => setWidth(Math.max(240, Math.round(el.clientWidth)));
     measure();
-    const observer = new ResizeObserver(() => measure());
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const observer = new ResizeObserver(() => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(measure, RESIZE_DEBOUNCE);
+    });
     observer.observe(el);
-    return () => observer.disconnect();
+    return () => {
+      if (timer) clearTimeout(timer);
+      observer.disconnect();
+    };
   }, []);
+
+  const refresher = useRef<ReturnType<typeof createRefresher> | null>(null);
+  if (!refresher.current) refresher.current = createRefresher(api);
+  const drawnRef = useRef(onDrawn);
+  drawnRef.current = onDrawn;
+  const nowRef = useRef(now);
+  nowRef.current = now;
 
   useEffect(() => {
     if (!width || !names.length) return;
     let cancelled = false;
-    const win = windowOf(range, now);
+    const spec: GraphSpec = { names, compare: !!targets, range, width, height, theme, small, withSeries: !small };
     (async () => {
       try {
-        const list = await Promise.all(names.map((n) => api.series(n, win, width)));
-        const step = Math.max(...list.map((s) => s.step));
-        const query: GraphQuery = { from: list[0]?.from ?? win.from, to: win.to, step, width, height, theme, bare: small };
-        const url = targets ? api.compareUrl(names, query) : api.graphUrl(names[0]!, query);
-        const svg = await api.svg(url);
-        if (cancelled || !holder.current) return;
-        holder.current.innerHTML = svg;
-        setSeries(list);
+        const loaded = await refresher.current!.refresh(spec, nowRef.current);
+        if (!loaded || cancelled || !holder.current) return;
+        holder.current.innerHTML = loaded.svg;
         setError(null);
-        onDrawn?.({ series: list, svgUrl: url });
+        const list = loaded.series ? await loaded.series : [];
+        if (cancelled) return;
+        setSeries(list);
+        drawnRef.current?.({ series: list, svgUrl: loaded.url });
       } catch (e) {
         if (!cancelled) setError((e as Error).message);
       }
@@ -94,7 +109,7 @@ export function Graph({ target, targets, height, small = false, onOpen, onDrawn 
     return () => {
       cancelled = true;
     };
-  }, [key, width, height, theme, small, range.span, range.to, now]);
+  }, [key, width, height, theme, small, range.span, range.to, refreshBucket(range, now)]);
 
   useEffect(() => {
     const onHover: HoverListener = (t) => setHover(t);

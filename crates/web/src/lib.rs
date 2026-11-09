@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::Router;
 use axum::extract::{Path, Query, State};
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -233,19 +233,49 @@ fn graph_options(range: &Range) -> GraphOptions {
     }
 }
 
-fn image(file: &str, svg: String) -> Reply {
+fn cache_control(step: i64) -> String {
+    format!("max-age={}", (step / 1000).clamp(1, 300))
+}
+
+fn etag_of(body: &str, step: i64) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    body.hash(&mut hasher);
+    step.hash(&mut hasher);
+    format!("\"{:016x}\"", hasher.finish())
+}
+
+fn cached(headers: &HeaderMap, content_type: &'static str, step: i64, body: String) -> Response {
+    let etag = etag_of(&body, step);
+    let fresh = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.split(',').any(|t| t.trim() == etag));
+    let control = cache_control(step);
+    if fresh {
+        return (
+            StatusCode::NOT_MODIFIED,
+            [(header::ETAG, etag), (header::CACHE_CONTROL, control)],
+        )
+            .into_response();
+    }
+    (
+        [
+            (header::CONTENT_TYPE, content_type.to_string()),
+            (header::ETAG, etag),
+            (header::CACHE_CONTROL, control),
+        ],
+        body,
+    )
+        .into_response()
+}
+
+fn image(headers: &HeaderMap, file: &str, step: i64, svg: String) -> Reply {
     if file.ends_with(".png") {
         let png = graph::png(&svg).map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
         return Ok(([(header::CONTENT_TYPE, "image/png")], png).into_response());
     }
-    Ok((
-        [
-            (header::CONTENT_TYPE, "image/svg+xml"),
-            (header::CACHE_CONTROL, "no-cache"),
-        ],
-        svg,
-    )
-        .into_response())
+    Ok(cached(headers, "image/svg+xml", step, svg))
 }
 
 fn split_image(file: &str) -> Option<&str> {
@@ -255,16 +285,20 @@ fn split_image(file: &str) -> Option<&str> {
 
 async fn series(
     State(app): State<App>,
+    headers: HeaderMap,
     Path(target): Path<String>,
     Query(range): Query<Range>,
 ) -> Reply {
     app.known(&target)?;
     let window = app.window(&range, app.min_step(&target))?;
-    Ok(axum::Json(app.series(&target, &window).await?).into_response())
+    let body = serde_json::to_string(&app.series(&target, &window).await?)
+        .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(cached(&headers, "application/json", window.step, body))
 }
 
 async fn graph(
     State(app): State<App>,
+    headers: HeaderMap,
     Path(file): Path<String>,
     Query(range): Query<Range>,
 ) -> Reply {
@@ -273,11 +307,17 @@ async fn graph(
     app.known(target)?;
     let window = app.window(&range, app.min_step(target))?;
     let series = app.series(target, &window).await?;
-    image(&file, graph::smoke_svg(&series, &graph_options(&range)))
+    image(
+        &headers,
+        &file,
+        window.step,
+        graph::smoke_svg(&series, &graph_options(&range)),
+    )
 }
 
 async fn compare(
     State(app): State<App>,
+    headers: HeaderMap,
     Path(file): Path<String>,
     Query(range): Query<Range>,
 ) -> Reply {
@@ -314,7 +354,12 @@ async fn compare(
     for name in &names {
         list.push(app.series(name, &window).await?);
     }
-    image(&file, graph::compare_svg(&list, &graph_options(&range)))
+    image(
+        &headers,
+        &file,
+        window.step,
+        graph::compare_svg(&list, &graph_options(&range)),
+    )
 }
 
 #[derive(Deserialize)]

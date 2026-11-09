@@ -221,6 +221,41 @@ async fn series_picks_a_step_for_the_range_and_rejects_bad_ranges() {
 }
 
 #[tokio::test]
+async fn graphs_pick_their_own_step_and_revalidate() {
+    let f = fixture();
+    let uri = format!(
+        "/api/graph/dns/one.svg?from={}&to={}&w=500&h=120&bare=1",
+        f.now - 3 * HOUR,
+        f.now
+    );
+    let first = f
+        .app
+        .clone()
+        .oneshot(Request::get(&uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    let control = first.headers()["cache-control"]
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(control.starts_with("max-age="), "{control}");
+    let etag = first.headers()["etag"].to_str().unwrap().to_string();
+    let again = f
+        .app
+        .clone()
+        .oneshot(
+            Request::get(&uri)
+                .header("if-none-match", &etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(again.status(), StatusCode::NOT_MODIFIED);
+}
+
+#[tokio::test]
 async fn graphs_are_svg_and_png() {
     let f = fixture();
     let (status, kind, body) = get(&f.app, "/api/graph/dns/one.svg?w=640&h=200").await;
