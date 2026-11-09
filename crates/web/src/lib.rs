@@ -23,10 +23,8 @@ const MAX_SPAN: i64 = 800 * 86_400_000;
 const MAX_POINTS: i64 = 4000;
 const RECENT_ALERTS: usize = 500;
 
-static INDEX: &str = include_str!("../client/index.html");
-static APP_JS: &str = include_str!("../client/app.js");
-static APP_CSS: &str = include_str!("../client/app.css");
-static ICON: &str = include_str!("../client/icon.svg");
+static INDEX: &str = include_str!("../ui/dist/index.html");
+static ICON: &str = include_str!("../ui/src/icon.svg");
 
 #[derive(Clone)]
 pub struct App {
@@ -48,14 +46,6 @@ pub fn router(hub: Arc<Hub>) -> std::io::Result<Router> {
         .route(
             "/",
             get(|| async { asset("text/html; charset=utf-8", INDEX) }),
-        )
-        .route(
-            "/app.js",
-            get(|| async { asset("text/javascript; charset=utf-8", APP_JS) }),
-        )
-        .route(
-            "/app.css",
-            get(|| async { asset("text/css; charset=utf-8", APP_CSS) }),
         )
         .route("/icon.svg", get(|| async { asset("image/svg+xml", ICON) }))
         .route("/api/targets", get(targets))

@@ -317,16 +317,19 @@ async fn the_dashboard_and_its_assets_are_embedded() {
     assert_eq!(status, StatusCode::OK);
     assert!(kind.starts_with("text/html"));
     let html = String::from_utf8(body).unwrap();
-    assert!(html.contains("/app.js") && html.contains("/app.css"));
+    assert!(html.contains("<div id=\"app\"></div>"));
+    assert!(html.contains("<meta name=\"haze-source\""));
     assert!(
-        !html.contains("http://") && !html.contains("https://"),
+        !html.contains("src=\"http") && !html.contains("href=\"http"),
         "no CDN"
     );
-    let (_, kind, js) = get(&f.app, "/app.js").await;
-    assert!(kind.starts_with("text/javascript"));
-    assert!(!String::from_utf8(js).unwrap().contains("https://"));
-    let (_, kind, _) = get(&f.app, "/app.css").await;
-    assert!(kind.starts_with("text/css"));
+    assert!(
+        !html.contains("src=\"/"),
+        "no separate script or style requests"
+    );
+    let (status, kind, _) = get(&f.app, "/icon.svg").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(kind, "image/svg+xml");
 }
 
 #[tokio::test]
