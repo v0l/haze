@@ -19,8 +19,8 @@ the plan.
 haze ping 1.1.1.1 -c 20
 haze ping https://example.com/ --probe http -c 5
 haze ping example.com --probe tcp -p 443
-haze ping wss://nos.lol --probe nostr -c 3 -W 5s
-haze ping 1.1.1.1 --probe dns --name example.com --record AAAA
+haze ping wss://relay.snort.social --probe nostr -c 3 -W 5s
+haze ping 8.8.8.8 --probe dns --name example.com --record AAAA
 haze check haze.toml
 haze run haze.toml
 haze show data --last 1h
@@ -110,21 +110,31 @@ comment = "sustained packet loss"
 [alerts.slow]
 when = "median > 2x baseline 3 of 5"
 
+[targets.ping]
+tags = ["icmp"]
+alerts = ["loss", "slow"]
+
+[targets.ping.cloudflare]
+host = "1.1.1.1"
+
+[targets.ping.google]
+host = "8.8.8.8"
+
 [targets.dns]
 tags = ["dns"]
 alerts = ["loss", "slow"]
+probe = "dns"
+name = "example.com"
+record = "A"
 
 [targets.dns.cloudflare]
 host = "1.1.1.1"
 
-[targets.dns.lookup]
-probe = "dns"
-host = "1.1.1.1"
-name = "example.com"
-record = "A"
+[targets.dns.google]
+host = "8.8.8.8"
 
-[targets.nostr.noslol]
-url = "wss://nos.lol"
+[targets.nostr.snort]
+url = "wss://relay.snort.social"
 pings = 3
 timeout = "5s"
 

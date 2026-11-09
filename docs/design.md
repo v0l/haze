@@ -58,8 +58,8 @@ receive path and timestamps. The ICMP code needed is about 200 lines.
 - **Nostr relay** (built): DNS, TCP connect, TLS, the WebSocket upgrade, then a `REQ` for one
   event id with `limit 1` timed to the first `EVENT` or `EOSE`, each as a phase. `tokio-tungstenite`
   over our own TCP and rustls stream so the phases stay separate. Publishing an `EVENT` and timing
-  its `OK` needs a key and writes to the relay, so it waits for the user. relay.damus.io refuses
-  HTTP/1.1 upgrades (503, issue #369).
+  its `OK` needs a key and writes to the relay, so it waits for the user. A relay that refuses
+  the upgrade (an HTTP error such as 503) counts as a lost ping with the status as the reason.
 - **TWAMP-light, STUN, QUIC handshake, looking glass** (later): TWAMP-light reflector is a UDP
   probe with timestamps in the payload; STUN binding request is a UDP probe; QUIC via `quinn`;
   the lg.lnvps.cloud check as an HTTP probe with a body matcher.

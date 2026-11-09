@@ -4,7 +4,10 @@ pings = 20
 timeout = "2s"
 
 [storage]
-dir = "demo-data"
+dir = "data"
+
+[web]
+listen = "127.0.0.1:8480"
 
 [alerts.loss]
 when = "loss >= 10% for 3 steps"
@@ -14,12 +17,22 @@ comment = "sustained packet loss"
 when = "median > 2x baseline 3 of 5"
 baseline_steps = 60
 
-[alerts.smoky]
-when = "smoke > 50ms 2 of 3"
+[targets.ping]
+tags = ["icmp", "anycast"]
+alerts = ["loss", "slow"]
+
+[targets.ping.cloudflare]
+host = "1.1.1.1"
+
+[targets.ping.google]
+host = "8.8.8.8"
 
 [targets.dns]
 tags = ["dns", "anycast"]
 alerts = ["loss", "slow"]
+probe = "dns"
+name = "example.com"
+pings = 10
 
 [targets.dns.cloudflare]
 host = "1.1.1.1"
@@ -27,20 +40,10 @@ host = "1.1.1.1"
 [targets.dns.google]
 host = "8.8.8.8"
 
-[targets.nostr.damus]
-title = "relay.damus.io WebSocket port"
-host = "relay.damus.io"
-probe = "tcp"
-port = 443
-alerts = ["loss"]
-
-[targets.web.example]
-url = "https://example.com/"
+[targets.nostr.snort]
+title = "relay.snort.social REQ to EOSE"
+url = "wss://relay.snort.social"
 pings = 5
 timeout = "5s"
-alerts = ["smoky"]
-
-[targets.lnvps.lg]
-title = "LNVPS looking glass"
-host = "lg.lnvps.cloud"
-alerts = ["loss", "slow"]
+tags = ["nostr"]
+alerts = ["loss"]

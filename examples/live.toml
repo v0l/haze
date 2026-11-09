@@ -21,34 +21,35 @@ baseline_steps = 60
 when = "smoke > 1ms 2 of 3"
 comment = "the spread between p10 and p90 is over 1 ms"
 
-[targets.dns]
-tags = ["dns", "anycast"]
+[targets.ping]
+tags = ["icmp", "anycast"]
 alerts = ["loss", "slow", "smoky"]
 
-[targets.dns.cloudflare]
+[targets.ping.cloudflare]
 host = "1.1.1.1"
 
-[targets.dns.google]
+[targets.ping.google]
 host = "8.8.8.8"
 
-[targets.dns.lookup]
-title = "example.com A record from 1.1.1.1"
+[targets.dns]
+tags = ["dns", "anycast"]
+alerts = ["loss", "slow"]
 probe = "dns"
-host = "1.1.1.1"
 name = "example.com"
 pings = 5
 
-[targets.nostr.noslol]
-title = "nos.lol REQ to EOSE"
-url = "wss://nos.lol"
+[targets.dns.cloudflare]
+title = "example.com A from 1.1.1.1"
+host = "1.1.1.1"
+
+[targets.dns.google]
+title = "example.com A from 8.8.8.8"
+host = "8.8.8.8"
+
+[targets.nostr.snort]
+title = "relay.snort.social REQ to EOSE"
+url = "wss://relay.snort.social"
 pings = 3
 timeout = "5s"
 tags = ["nostr"]
-alerts = ["loss"]
-
-[targets.web.example]
-url = "https://example.com/"
-pings = 3
-timeout = "5s"
-tags = ["web"]
 alerts = ["loss"]
