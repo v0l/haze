@@ -2,11 +2,13 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use haze_core::duration::format_ms;
 use haze_core::{AlertEvent, AlertState, Config, Step, Summary, smoke_line};
 use haze_probe::{Sampler, StepDetail, build};
 use haze_store::Store;
+use haze_web::Hub;
+use std::net::SocketAddr;
 use tokio::sync::mpsc;
 use tokio::time::{Instant, MissedTickBehavior};
 
@@ -89,8 +91,35 @@ impl Evaluator {
     }
 }
 
-pub async fn run(config: Config, duration: Option<Duration>, quiet: bool) -> Result<()> {
+pub struct Options {
+    pub duration: Option<Duration>,
+    pub quiet: bool,
+    pub listen: Option<SocketAddr>,
+    pub notify: Vec<crate::notify::Route>,
+}
+
+pub async fn run(config: Config, options: Options) -> Result<()> {
+    let Options {
+        duration,
+        quiet,
+        listen,
+        notify,
+    } = options;
     let mut store = Store::open(&config.storage_dir)?;
+    let hub = Arc::new(Hub::new(config.clone(), &config.storage_dir, now_ms())?);
+    if let Some(listen) = listen {
+        let app = haze_web::router(hub.clone())?;
+        let listener = tokio::net::TcpListener::bind(listen)
+            .await
+            .with_context(|| format!("listening on {listen}"))?;
+        eprintln!("dashboard on http://{}", listener.local_addr()?);
+        tokio::spawn(async move {
+            if let Err(e) = axum::serve(listener, app).await {
+                eprintln!("the dashboard stopped: {e}");
+            }
+        });
+    }
+    let notifier = crate::notify::Notifier::new(notify);
     let started = Instant::now();
     let deadline = duration.map(|d| started + d);
     let (tx, mut rx) = mpsc::channel::<Measured>(256);
@@ -155,6 +184,7 @@ pub async fn run(config: Config, duration: Option<Duration>, quiet: bool) -> Res
         if let Err(e) = store.append(&target.path, &measured.step) {
             eprintln!("{}: storing the step failed: {e}", target.path);
         }
+        hub.step_done(&target.path, &measured.step);
         let summary = measured.step.summary();
         if !quiet {
             let mut line = format!(
@@ -181,13 +211,30 @@ pub async fn run(config: Config, duration: Option<Duration>, quiet: bool) -> Res
             }
             println!("{line}");
         }
-        for notice in evaluator.observe(measured.target, summary) {
+        for notice in evaluator.observe(measured.target, summary.clone()) {
+            let at = now_ms();
             println!(
                 "{} ALERT {} {}: {:?}",
-                clock(now_ms()),
+                clock(at),
                 notice.target,
                 notice.alert,
                 notice.event
+            );
+            hub.alert(&notice.target, &notice.alert, notice.event, at);
+            notifier.send_tagged(
+                crate::notify::Message {
+                    target: notice.target.clone(),
+                    alert: notice.alert.clone(),
+                    event: haze_web::hub::event_name(notice.event).to_string(),
+                    at_ms: at,
+                    comment: config
+                        .alerts
+                        .get(&notice.alert)
+                        .and_then(|a| a.comment.clone()),
+                    loss: summary.loss,
+                    median_ms: haze_web::hub::ms(summary.median),
+                },
+                target.tags.clone(),
             );
         }
         if now_ms() - last_prune > 3_600_000 {
@@ -195,9 +242,13 @@ pub async fn run(config: Config, duration: Option<Duration>, quiet: bool) -> Res
             if let Err(e) = store.prune(now_ms() - retention_ms) {
                 eprintln!("pruning old data failed: {e}");
             }
+            if let Err(e) = store.rollup_closed_days(now_ms()) {
+                eprintln!("rolling up old days failed: {e}");
+            }
         }
     }
     store.sync()?;
+    notifier.finish().await;
     for worker in workers {
         worker.abort();
     }

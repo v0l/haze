@@ -9,7 +9,9 @@ description.workspace = true
 haze-core.workspace = true
 haze-probe.workspace = true
 haze-store.workspace = true
+haze-web.workspace = true
 anyhow.workspace = true
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
 clap.workspace = true
 tokio.workspace = true
 

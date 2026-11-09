@@ -1,4 +1,9 @@
+mod notify;
 mod run;
+
+use std::net::SocketAddr;
+
+const DEFAULT_LISTEN: &str = "127.0.0.1:8480";
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -33,8 +38,14 @@ enum Command {
         interval: Duration,
         #[arg(short = 'W', long, default_value = "2s", value_parser = parse_duration)]
         timeout: Duration,
-        #[arg(long, value_parser = ["icmp", "tcp", "udp", "http"], default_value = "icmp")]
+        #[arg(long, value_parser = ["icmp", "tcp", "udp", "http", "nostr", "dns"], default_value = "icmp")]
         probe: String,
+        #[arg(long, help = "Name to look up with the dns probe")]
+        name: Option<String>,
+        #[arg(long, help = "Record type for the dns probe", default_value = "A")]
+        record: String,
+        #[arg(long, help = "Event id the nostr probe asks for")]
+        event: Option<String>,
         #[arg(short = 'p', long)]
         port: Option<u16>,
         #[arg(short = '4', conflicts_with = "ipv6")]
@@ -63,6 +74,10 @@ enum Command {
         duration: Option<Duration>,
         #[arg(short, long)]
         quiet: bool,
+        #[arg(long, env = "HAZE_LISTEN", conflicts_with = "no_web")]
+        listen: Option<SocketAddr>,
+        #[arg(long)]
+        no_web: bool,
     },
     #[command(about = "Summarise stored steps per target")]
     Show {
@@ -84,6 +99,9 @@ fn main() -> Result<()> {
             interval,
             timeout,
             probe,
+            name,
+            record,
+            event,
             port,
             ipv4,
             ipv6,
@@ -94,17 +112,19 @@ fn main() -> Result<()> {
             if count == 0 || count > haze_core::config::MAX_PINGS {
                 bail!("count must be 1 to {}", haze_core::config::MAX_PINGS);
             }
-            let kind = match probe.as_str() {
-                "tcp" => ProbeKind::Tcp,
-                "udp" => ProbeKind::Udp,
-                "http" => ProbeKind::Http,
-                _ => ProbeKind::Icmp,
-            };
+            let kind = ProbeKind::parse(&probe).map_err(anyhow::Error::msg)?;
+            let by_url = matches!(kind, ProbeKind::Http | ProbeKind::Nostr);
+            if kind == ProbeKind::Dns && name.is_none() {
+                bail!("the dns probe needs --name");
+            }
             let target = Target {
                 path: host.clone(),
                 title: None,
-                host: (kind != ProbeKind::Http).then(|| host.clone()),
-                url: (kind == ProbeKind::Http).then(|| host.clone()),
+                host: (!by_url).then(|| host.clone()),
+                url: by_url.then(|| host.clone()),
+                name,
+                record: Some(record.to_ascii_uppercase()),
+                event,
                 probe: kind,
                 step: (interval * count).max(MIN_STEP),
                 pings: count,
@@ -139,12 +159,29 @@ fn main() -> Result<()> {
             data,
             duration,
             quiet,
+            listen,
+            no_web,
         } => {
             let mut config = load(&config)?;
             if let Some(data) = data {
                 config.storage_dir = data.display().to_string();
             }
-            runtime.block_on(run::run(config, duration, quiet))
+            let listen = match (no_web, listen, &config.listen) {
+                (true, _, _) => None,
+                (false, Some(listen), _) => Some(listen),
+                (false, None, Some(text)) => Some(
+                    text.parse()
+                        .with_context(|| format!("[web] listen `{text}` is not an address:port"))?,
+                ),
+                (false, None, None) => Some(DEFAULT_LISTEN.parse()?),
+            };
+            let options = run::Options {
+                duration,
+                quiet,
+                listen,
+                notify: config.notify.clone(),
+            };
+            runtime.block_on(run::run(config, options))
         }
         Command::Show { dir, last, target } => show(&dir, last, target.as_deref()),
     }
