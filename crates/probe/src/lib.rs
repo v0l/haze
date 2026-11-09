@@ -6,6 +6,7 @@ pub mod icmp;
 pub mod limit;
 pub mod net;
 pub mod nostr;
+pub mod smtp;
 pub mod tcp;
 pub mod udp;
 
@@ -48,6 +49,10 @@ pub async fn build(target: &Target) -> Result<Arc<dyn Probe>, String> {
         ProbeKind::Icmp => return Err("ICMP is not supported on this platform yet".into()),
         ProbeKind::Tcp => Arc::new(tcp::TcpConnect::new(
             SocketAddr::new(address().await?, target.port.unwrap_or_default()),
+            &options,
+        )),
+        ProbeKind::Smtp => Arc::new(smtp::Smtp::new(
+            SocketAddr::new(address().await?, target.port.unwrap_or(25)),
             &options,
         )),
         ProbeKind::Udp => Arc::new(

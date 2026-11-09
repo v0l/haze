@@ -101,6 +101,7 @@ pub enum ProbeKind {
     Http,
     Nostr,
     Dns,
+    Smtp,
 }
 
 impl ProbeKind {
@@ -112,9 +113,10 @@ impl ProbeKind {
             "http" | "https" => ProbeKind::Http,
             "nostr" => ProbeKind::Nostr,
             "dns" => ProbeKind::Dns,
+            "smtp" => ProbeKind::Smtp,
             other => {
                 return Err(format!(
-                    "`{other}` is not a probe (icmp, tcp, udp, http, nostr, dns)"
+                    "`{other}` is not a probe (icmp, tcp, udp, http, nostr, dns, smtp)"
                 ));
             }
         })
@@ -128,6 +130,7 @@ impl ProbeKind {
             ProbeKind::Http => "http",
             ProbeKind::Nostr => "nostr",
             ProbeKind::Dns => "dns",
+            ProbeKind::Smtp => "smtp",
         }
     }
 
@@ -136,12 +139,15 @@ impl ProbeKind {
             ProbeKind::Icmp | ProbeKind::Udp => MAX_PINGS,
             ProbeKind::Dns => 5,
             ProbeKind::Tcp => 3,
-            ProbeKind::Http | ProbeKind::Nostr => 1,
+            ProbeKind::Http | ProbeKind::Nostr | ProbeKind::Smtp => 1,
         }
     }
 
     pub fn opens_connections(self) -> bool {
-        matches!(self, ProbeKind::Tcp | ProbeKind::Http | ProbeKind::Nostr)
+        matches!(
+            self,
+            ProbeKind::Tcp | ProbeKind::Http | ProbeKind::Nostr | ProbeKind::Smtp
+        )
     }
 }
 
@@ -202,7 +208,11 @@ impl Target {
             .as_deref()
             .unwrap_or_default()
             .to_ascii_lowercase();
-        let port = self.port.or((self.probe == ProbeKind::Dns).then_some(53));
+        let port = self.port.or(match self.probe {
+            ProbeKind::Dns => Some(53),
+            ProbeKind::Smtp => Some(25),
+            _ => None,
+        });
         match port {
             Some(port) if host.contains(':') => format!("[{host}]:{port}"),
             Some(port) => format!("{host}:{port}"),

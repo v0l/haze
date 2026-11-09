@@ -38,7 +38,7 @@ enum Command {
         interval: Duration,
         #[arg(short = 'W', long, default_value = "2s", value_parser = parse_duration)]
         timeout: Duration,
-        #[arg(long, value_parser = ["icmp", "tcp", "udp", "http", "nostr", "dns"], default_value = "icmp")]
+        #[arg(long, value_parser = ["icmp", "tcp", "udp", "http", "nostr", "dns", "smtp"], default_value = "icmp")]
         probe: String,
         #[arg(long, help = "Name to look up with the dns probe")]
         name: Option<String>,
