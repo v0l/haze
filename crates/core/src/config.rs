@@ -18,6 +18,9 @@ pub struct Settings {
     pub size: Option<usize>,
     pub tos: Option<u8>,
     pub port: Option<u16>,
+    pub name: Option<String>,
+    pub record: Option<String>,
+    pub event: Option<String>,
 }
 
 impl Settings {
@@ -32,6 +35,9 @@ impl Settings {
             size: self.size.or(parent.size),
             tos: self.tos.or(parent.tos),
             port: self.port.or(parent.port),
+            name: self.name.clone().or_else(|| parent.name.clone()),
+            record: self.record.clone().or_else(|| parent.record.clone()),
+            event: self.event.clone().or_else(|| parent.event.clone()),
         }
     }
 }
@@ -178,9 +184,6 @@ struct Node {
     alerts: Vec<String>,
     #[serde(default)]
     depends: Vec<String>,
-    name: Option<String>,
-    record: Option<String>,
-    event: Option<String>,
     #[serde(flatten)]
     settings: Settings,
 }
@@ -397,19 +400,19 @@ fn resolve(path: String, node: Node, inherited: Inherited) -> Result<Target, Str
             "target `{path}`: a nostr relay url starts with wss:// or ws://"
         ));
     }
-    if let Some(event) = &node.event
+    if let Some(event) = &s.event
         && (event.len() != 64 || !event.bytes().all(|b| b.is_ascii_hexdigit()))
     {
         return Err(format!(
             "target `{path}`: event must be a 64 character hex event id"
         ));
     }
-    if probe == ProbeKind::Dns && node.name.is_none() {
+    if probe == ProbeKind::Dns && s.name.is_none() {
         return Err(format!(
             "target `{path}`: the dns probe needs a name to look up"
         ));
     }
-    if let Some(record) = &node.record
+    if let Some(record) = &s.record
         && !matches!(
             record.to_ascii_uppercase().as_str(),
             "A" | "AAAA" | "NS" | "MX" | "TXT" | "SOA" | "CNAME"
@@ -439,9 +442,9 @@ fn resolve(path: String, node: Node, inherited: Inherited) -> Result<Target, Str
         size: s.size.unwrap_or(56),
         tos: s.tos,
         port: s.port,
-        name: node.name,
-        record: node.record.map(|r| r.to_ascii_uppercase()),
-        event: node.event.map(|e| e.to_ascii_lowercase()),
+        name: s.name,
+        record: s.record.map(|r| r.to_ascii_uppercase()),
+        event: s.event.map(|e| e.to_ascii_lowercase()),
         tags: inherited.tags,
         alerts: inherited.alerts,
         depends: inherited.depends,
@@ -560,6 +563,21 @@ port = 22
     }
 
     #[test]
+    fn dns_and_nostr_settings_are_inherited_from_groups() {
+        let config = Config::parse(
+            "[targets.dns]\nprobe = \"dns\"\nname = \"example.com\"\nrecord = \"aaaa\"\n[targets.dns.cloudflare]\nhost = \"1.1.1.1\"\n[targets.dns.google]\nhost = \"8.8.8.8\"\nname = \"example.org\"",
+        )
+        .unwrap();
+        let cf = config.target("dns/cloudflare").unwrap();
+        assert_eq!(cf.probe, ProbeKind::Dns);
+        assert_eq!(cf.name.as_deref(), Some("example.com"));
+        assert_eq!(cf.record.as_deref(), Some("AAAA"));
+        let google = config.target("dns/google").unwrap();
+        assert_eq!(google.name.as_deref(), Some("example.org"));
+        assert_eq!(google.record.as_deref(), Some("AAAA"));
+    }
+
+    #[test]
     fn web_notify_nostr_and_dns_settings() {
         let config = Config::parse(
             r#"
@@ -576,7 +594,7 @@ kind = "webhook"
 url = "http://127.0.0.1:9000/hook"
 
 [targets.relay]
-url = "wss://relay.damus.io"
+url = "wss://relay.snort.social"
 event = "D7DD5EB3AB747E16F8D0212D53032EA2A7CADEF53837E5A6C66D42849FCB9027"
 
 [targets.lookup]
