@@ -175,15 +175,14 @@ async fn tcp_connect_to_a_local_listener() {
 }
 
 #[tokio::test]
-async fn tcp_connect_refused_is_a_failure() {
+async fn tcp_connect_refused_is_a_reset() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     drop(listener);
     let probe = TcpConnect::new(address, &NO_OPTIONS);
-    assert!(matches!(
-        probe.probe(0, Duration::from_secs(1)).await,
-        Err(ProbeError::Failed(_))
-    ));
+    let error = probe.probe(0, Duration::from_secs(1)).await.unwrap_err();
+    assert!(matches!(error, ProbeError::Reset(_)), "{error:?}");
+    assert!(error.backoff_reason().is_some());
 }
 
 #[tokio::test]
@@ -224,19 +223,75 @@ async fn http_timing_against_a_slow_local_server() {
 
 #[tokio::test]
 async fn http_error_status_is_a_failure() {
+    let probe = Http::new(
+        &format!("http://{}/", answering("500 Oops", "").await),
+        None,
+        &NO_OPTIONS,
+    )
+    .unwrap();
+    let error = probe.probe(0, Duration::from_secs(1)).await.unwrap_err();
+    assert_eq!(error, ProbeError::Failed("HTTP 500".into()));
+    assert_eq!(error.backoff_reason(), None);
+}
+
+async fn answering(status: &'static str, headers: &'static str) -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 1024];
+            let _ = stream.read(&mut buf).await;
+            let reply = format!("HTTP/1.1 {status}\r\n{headers}Content-Length: 0\r\n\r\n");
+            let _ = stream.write_all(reply.as_bytes()).await;
+        }
+    });
+    address
+}
+
+#[tokio::test]
+async fn http_429_and_503_are_refusals_with_retry_after() {
+    let busy = answering("429 Too Many Requests", "Retry-After: 120\r\n").await;
+    let probe = Http::new(&format!("http://{busy}/"), None, &NO_OPTIONS).unwrap();
+    let error = probe.probe(0, Duration::from_secs(1)).await.unwrap_err();
+    assert_eq!(
+        error,
+        ProbeError::Refused {
+            status: 429,
+            retry_after: Some(Duration::from_secs(120))
+        }
+    );
+    assert_eq!(error.backoff_reason().as_deref(), Some("HTTP 429"));
+    let down = answering("503 Busy", "").await;
+    let probe = Http::new(&format!("http://{down}/"), None, &NO_OPTIONS).unwrap();
+    assert_eq!(
+        probe.probe(0, Duration::from_secs(1)).await,
+        Err(ProbeError::Refused {
+            status: 503,
+            retry_after: None
+        })
+    );
+}
+
+#[tokio::test]
+async fn a_tls_alert_is_a_reset() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
-        let mut buf = [0u8; 1024];
+        let mut buf = [0u8; 4096];
         let _ = stream.read(&mut buf).await;
         let _ = stream
-            .write_all(b"HTTP/1.1 503 Busy\r\nContent-Length: 0\r\n\r\n")
+            .write_all(&[0x15, 0x03, 0x03, 0x00, 0x02, 0x02, 0x28])
             .await;
     });
-    let probe = Http::new(&format!("http://{address}/"), None, &NO_OPTIONS).unwrap();
+    let probe = Http::new(&format!("https://{address}/"), None, &NO_OPTIONS).unwrap();
     let error = probe.probe(0, Duration::from_secs(1)).await.unwrap_err();
-    assert_eq!(error, ProbeError::Failed("HTTP 503".into()));
+    assert!(matches!(error, ProbeError::Reset(_)), "{error:?}");
+    assert!(
+        error.backoff_reason().unwrap().contains("TLS alert"),
+        "{error:?}"
+    );
 }
 
 #[tokio::test]

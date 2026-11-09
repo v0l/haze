@@ -12,7 +12,7 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use crate::correlate::random_u64;
 use crate::http::{Url, tls_connector};
 use crate::net::{SocketOptions, resolve};
-use crate::tcp::{connect, failure};
+use crate::tcp::{connect, failure, tls_failure};
 
 pub const DEFAULT_EVENT: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
@@ -161,11 +161,7 @@ impl Relay {
         }
         let name = ServerName::try_from(self.parsed.host.clone())
             .map_err(|e| ProbeError::Failed(format!("bad server name: {e}")))?;
-        let stream = self
-            .tls
-            .connect(name, stream)
-            .await
-            .map_err(|e| ProbeError::Failed(format!("TLS: {e}")))?;
+        let stream = self.tls.connect(name, stream).await.map_err(tls_failure)?;
         phases.push(("tls", started.elapsed() - connected));
         self.exchange(stream, started, phases).await
     }
@@ -173,9 +169,15 @@ impl Relay {
 
 fn upgrade_failure(error: tokio_tungstenite::tungstenite::Error) -> ProbeError {
     match error {
-        tokio_tungstenite::tungstenite::Error::Http(response) => {
-            ProbeError::Refused(response.status().as_u16())
-        }
+        tokio_tungstenite::tungstenite::Error::Http(response) => ProbeError::Refused {
+            status: response.status().as_u16(),
+            retry_after: response
+                .headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(haze_core::probe::parse_retry_after),
+        },
+        tokio_tungstenite::tungstenite::Error::Io(e) => failure(e),
         other => ProbeError::Failed(format!("WebSocket: {other}")),
     }
 }

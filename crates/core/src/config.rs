@@ -197,7 +197,11 @@ impl Target {
                 format!("{}:{port}", authority.to_ascii_lowercase())
             };
         }
-        let host = self.host.as_deref().unwrap_or_default().to_ascii_lowercase();
+        let host = self
+            .host
+            .as_deref()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
         let port = self.port.or((self.probe == ProbeKind::Dns).then_some(53));
         match port {
             Some(port) if host.contains(':') => format!("[{host}]:{port}"),
@@ -340,8 +344,25 @@ impl Config {
 }
 
 const NODE_KEYS: [&str; 20] = [
-    "title", "host", "url", "tags", "alerts", "depends", "probe", "step", "pings", "timeout",
-    "family", "source", "size", "tos", "port", "name", "record", "event", "method",
+    "title",
+    "host",
+    "url",
+    "tags",
+    "alerts",
+    "depends",
+    "probe",
+    "step",
+    "pings",
+    "timeout",
+    "family",
+    "source",
+    "size",
+    "tos",
+    "port",
+    "name",
+    "record",
+    "event",
+    "method",
     "allow_aggressive",
 ];
 
@@ -763,8 +784,10 @@ step = "30s"
         assert!(error.contains("`a`"), "{error}");
         assert!(error.contains("allow_aggressive"), "{error}");
         assert!(
-            error_of("[targets.a]\nhost = \"x\"\nprobe = \"tcp\"\nport = 443\npings = 2\nstep = \"15s\"")
-                .contains("8 connections a minute")
+            error_of(
+                "[targets.a]\nhost = \"x\"\nprobe = \"tcp\"\nport = 443\npings = 2\nstep = \"15s\""
+            )
+            .contains("8 connections a minute")
         );
         Config::parse("[defaults]\npings = 20\n[targets.a]\nhost = \"1.1.1.1\"\nprobe = \"dns\"\nname = \"x\"").unwrap();
         Config::parse("[targets.a]\nurl = \"https://example.com/\"\npings = 6").unwrap();

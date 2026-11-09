@@ -84,10 +84,17 @@ pub struct Sampler {
     next_seq: AtomicU16,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct Pushback {
+    pub reason: String,
+    pub retry_after: Option<Duration>,
+}
+
 #[derive(Debug, Default)]
 pub struct StepDetail {
     pub errors: Vec<(u16, String)>,
     pub refusals: Vec<(u16, u16)>,
+    pub pushback: Option<Pushback>,
     pub last_reply: Option<Reply>,
 }
 
@@ -137,8 +144,16 @@ impl Sampler {
                     detail.last_reply = Some(reply);
                 }
                 Err(e) => {
-                    if let ProbeError::Refused(status) = e {
+                    if let ProbeError::Refused { status, .. } = e {
                         detail.refusals.push((seq, status));
+                    }
+                    if let Some(reason) = e.backoff_reason() {
+                        detail.pushback = Some(Pushback {
+                            reason,
+                            retry_after: e
+                                .retry_after()
+                                .max(detail.pushback.as_ref().and_then(|p| p.retry_after)),
+                        });
                     }
                     detail.errors.push((seq, e.to_string()));
                 }

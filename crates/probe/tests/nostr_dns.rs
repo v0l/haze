@@ -129,7 +129,7 @@ async fn nostr_reports_a_refused_relay() {
     let relay = Relay::new(&format!("ws://{address}"), None, None, &NONE).unwrap();
     assert!(matches!(
         relay.probe(0, Duration::from_secs(1)).await,
-        Err(ProbeError::Failed(_))
+        Err(ProbeError::Reset(_))
     ));
 }
 
@@ -221,6 +221,10 @@ async fn dns_silence_is_a_timeout() {
 }
 
 async fn refusing_relay(status: u16) -> String {
+    refusing_relay_with(status, "").await
+}
+
+async fn refusing_relay_with(status: u16, headers: &'static str) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     tokio::spawn(async move {
@@ -231,7 +235,7 @@ async fn refusing_relay(status: u16) -> String {
                 let mut buf = [0u8; 4096];
                 let _ = stream.read(&mut buf).await;
                 let reply = format!(
-                    "HTTP/1.1 {status} Nope\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+                    "HTTP/1.1 {status} Nope\r\n{headers}content-length: 0\r\nconnection: close\r\n\r\n"
                 );
                 let _ = stream.write_all(reply.as_bytes()).await;
             });
@@ -247,7 +251,10 @@ async fn nostr_refusal_is_not_a_timeout_and_is_counted_apart_from_loss() {
     let relay = Relay::new(&url, None, None, &NONE).unwrap();
     assert_eq!(
         relay.probe(0, Duration::from_secs(2)).await,
-        Err(ProbeError::Refused(503))
+        Err(ProbeError::Refused {
+            status: 503,
+            retry_after: None
+        })
     );
     let sampler = Sampler::new(Arc::new(relay));
     let (step, detail) = sampler
@@ -269,6 +276,24 @@ async fn nostr_refusal_is_not_a_timeout_and_is_counted_apart_from_loss() {
     let relay = Relay::new(&url, None, None, &NONE).unwrap();
     assert_eq!(
         relay.probe(0, Duration::from_secs(2)).await,
-        Err(ProbeError::Refused(400))
+        Err(ProbeError::Refused {
+            status: 400,
+            retry_after: None
+        })
     );
+}
+
+#[tokio::test]
+async fn a_refused_upgrade_carries_retry_after() {
+    let url = refusing_relay_with(429, "retry-after: 90\r\n").await;
+    let relay = Relay::new(&url, None, None, &NONE).unwrap();
+    let error = relay.probe(0, Duration::from_secs(2)).await.unwrap_err();
+    assert_eq!(
+        error,
+        ProbeError::Refused {
+            status: 429,
+            retry_after: Some(Duration::from_secs(90))
+        }
+    );
+    assert_eq!(error.backoff_reason().as_deref(), Some("HTTP 429"));
 }

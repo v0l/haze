@@ -45,7 +45,29 @@ pub async fn connect(
 }
 
 pub fn failure(e: std::io::Error) -> ProbeError {
-    ProbeError::Failed(e.to_string())
+    match e.kind() {
+        std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::ConnectionReset => {
+            ProbeError::Reset(format!("TCP reset: {e}"))
+        }
+        _ => ProbeError::Failed(e.to_string()),
+    }
+}
+
+pub fn tls_failure(e: std::io::Error) -> ProbeError {
+    let alert = e
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<rustls::Error>())
+        .and_then(|inner| match inner {
+            rustls::Error::AlertReceived(alert) => Some(format!("{alert:?}")),
+            _ => None,
+        });
+    match alert {
+        Some(alert) => ProbeError::Reset(format!("TLS alert {alert}")),
+        None => match failure(e) {
+            ProbeError::Failed(why) => ProbeError::Failed(format!("TLS: {why}")),
+            reset => reset,
+        },
+    }
 }
 
 impl Probe for TcpConnect {

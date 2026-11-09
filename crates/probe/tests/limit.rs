@@ -19,8 +19,14 @@ impl Probe for Stamp {
 async fn targets_on_one_destination_share_one_budget() {
     let starts: Arc<Mutex<Vec<Instant>>> = Arc::default();
     let limiter = Arc::new(Limiter::new(Duration::from_millis(100)));
-    let a = Arc::new(Limited::new(Arc::new(Stamp(starts.clone())), limiter.clone()));
-    let b = Arc::new(Limited::new(Arc::new(Stamp(starts.clone())), limiter.clone()));
+    let a = Arc::new(Limited::new(
+        Arc::new(Stamp(starts.clone())),
+        limiter.clone(),
+    ));
+    let b = Arc::new(Limited::new(
+        Arc::new(Stamp(starts.clone())),
+        limiter.clone(),
+    ));
     let mut tasks = tokio::task::JoinSet::new();
     for seq in 0..3 {
         let (a, b) = (a.clone(), b.clone());
@@ -65,7 +71,10 @@ allow_aggressive = true
     let map = limiters(&config.targets);
     let mut keys: Vec<&String> = map.keys().collect();
     keys.sort();
-    assert_eq!(keys, ["example.com:443", "example.com:80", "fast.example:443"]);
+    assert_eq!(
+        keys,
+        ["example.com:443", "example.com:80", "fast.example:443"]
+    );
     assert_eq!(map["example.com:443"].spacing(), Duration::from_secs(10));
     assert_eq!(map["fast.example:443"].spacing(), Duration::from_secs(3));
 }

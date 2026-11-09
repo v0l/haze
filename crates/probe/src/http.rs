@@ -2,13 +2,14 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use haze_core::probe::parse_retry_after;
 use haze_core::{Probe, ProbeError, ProbeFuture, Reply};
 use rustls::pki_types::ServerName;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio_rustls::TlsConnector;
 
 use crate::net::{SocketOptions, resolve};
-use crate::tcp::{connect, failure};
+use crate::tcp::{connect, failure, tls_failure};
 
 const BODY_LIMIT: usize = 1 << 20;
 
@@ -78,6 +79,7 @@ pub struct Http {
 #[derive(Clone, Debug, PartialEq)]
 pub struct HttpTiming {
     pub status: u16,
+    pub retry_after: Option<Duration>,
     pub dns: Duration,
     pub connect: Duration,
     pub tls: Option<Duration>,
@@ -145,11 +147,7 @@ impl Http {
         }
         let name = ServerName::try_from(self.url.host.clone())
             .map_err(|e| ProbeError::Failed(format!("bad server name: {e}")))?;
-        let stream = self
-            .tls
-            .connect(name, stream)
-            .await
-            .map_err(|e| ProbeError::Failed(format!("TLS: {e}")))?;
+        let stream = self.tls.connect(name, stream).await.map_err(tls_failure)?;
         let tls = started.elapsed() - connect;
         let days = stream
             .get_ref()
@@ -213,6 +211,7 @@ impl Http {
         }
         Ok(HttpTiming {
             status,
+            retry_after: header(&body, "retry-after").and_then(|v| parse_retry_after(&v)),
             dns,
             connect: connect - dns,
             tls,
@@ -230,6 +229,22 @@ pub fn parse_status(response: &[u8]) -> Option<u16> {
     let mut parts = line.split_whitespace();
     parts.next().filter(|v| v.starts_with("HTTP/"))?;
     parts.next()?.parse().ok()
+}
+
+fn header(response: &[u8], name: &str) -> Option<String> {
+    let end = response
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .unwrap_or(response.len());
+    String::from_utf8_lossy(&response[..end])
+        .lines()
+        .skip(1)
+        .find_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            key.trim()
+                .eq_ignore_ascii_case(name)
+                .then(|| value.trim().to_string())
+        })
 }
 
 fn response_complete(response: &[u8]) -> bool {
@@ -261,6 +276,12 @@ impl Probe for Http {
             let timing = tokio::time::timeout(timeout, self.fetch())
                 .await
                 .map_err(|_| ProbeError::Timeout)??;
+            if matches!(timing.status, 429 | 503) {
+                return Err(ProbeError::Refused {
+                    status: timing.status,
+                    retry_after: timing.retry_after,
+                });
+            }
             if !(200..400).contains(&timing.status) {
                 return Err(ProbeError::Failed(format!("HTTP {}", timing.status)));
             }
