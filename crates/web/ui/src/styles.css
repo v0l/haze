@@ -160,6 +160,7 @@ h2 { font-size: 15px; margin: 0 0 10px; color: var(--muted); font-weight: 600; }
 .graph { position: relative; width: 100%; touch-action: pan-y; cursor: grab; user-select: none; overflow: hidden; border-radius: 6px; }
 .graph.dragging { cursor: grabbing; }
 .graph svg { display: block; width: 100%; height: auto; }
+.svg-holder { width: 100%; }
 .graph.small { height: 34px; cursor: pointer; }
 .graph.small svg { height: 34px; }
 .cursor { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--accent); pointer-events: none; opacity: 0.7; }
