@@ -128,8 +128,8 @@ across restarts. Users and API tokens, when they come, go in one redb file; samp
 
 The web dashboard is the only UI (user decision): no desktop app.
 
-Options for the client: Preact built with Vite into a committed `web/dist`, an egui app compiled
-to WASM, or a hand-written ES module with no build step.
+Options for the client: Preact built with Vite, an egui app compiled to WASM, or a hand-written
+ES module with no build step.
 
 Choice: one binary serves everything with axum, and the graphs are SVG drawn in Rust from the
 merged histograms: min to max, p10 to p90 and p25 to p75 as stacked shaded bands, the median as a
@@ -138,15 +138,25 @@ same renderer makes the `/api/graph/<target>.svg` endpoint, the PNG export (thro
 an embedded DejaVu Sans Mono, so it needs no system fonts) and the dashboard's own graphs, so a
 graph looks the same everywhere and can be embedded anywhere.
 
-The client is one hand-written ES module (`crates/web/client/app.js`, about 650 lines) and one
-stylesheet, embedded with `include_str!`. It was picked over Preact and Vite because the pages are
-small and mostly drawn by the server: a build step would add Node to every change, a committed
-`dist` that can drift from its source, and a dependency tree to audit, for what is a few lists
-and a range bar. The module asks `/api/series` for the numbers behind the hover readout and
-`/api/graph` for the picture, with one time window shared by every graph on the page, so pan
-and zoom move them together. Live updates come over SSE (`/api/events`): each finished step
-updates the status dots and redraws the graphs of that target when the range ends at now.
-egui in WASM was rejected: a large download, weak text and accessibility, and poor on phones.
+The client is the user's standard stack: Bun, Vite, Preact and TypeScript (strict), in
+`crates/web/ui`, laid out like nostrsearch's dashboard. `vite-plugin-singlefile` inlines the
+script, styles and icon into one `dist/index.html` that the server embeds with `include_str!`,
+so there are no asset routes and the API and UI cannot drift apart. `src/types.ts` mirrors the
+Rust JSON. A first cut was a hand-written module with no build step; the user chose the standard
+stack instead.
+
+nostrsearch keeps `dist` out of git and has `build.rs` fail until the bundle is built. haze
+commits `dist/index.html` instead, so `cargo build`, `cargo test` and `cargo install` work on a
+machine without Bun (the release builders, the Pi, a contributor who only touches Rust). The
+price is a build output in git that could go stale, so the build stamps a hash of every input
+into the file and `crates/web/tests/bundle.rs` recomputes it from the sources and fails with the
+rebuild command when they differ. `build.rs` still fails clearly if the file is missing.
+
+The client asks `/api/series` for the numbers behind the hover readout and `/api/graph` for the
+picture, with one time window shared by every graph on the page, so pan and zoom move them
+together. Live updates come over SSE (`/api/events`): each finished step updates the status dots
+and redraws the graphs when the range ends at now. egui in WASM was rejected: a large download,
+weak text and accessibility, and poor on phones.
 
 Navigation is tags as well as the tree: a target path (`dns/cloudflare`) and any number of tags.
 Views (built): the tree with status dots and small graphs, a target page, compare (up to 6

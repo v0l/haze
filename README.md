@@ -43,7 +43,9 @@ overrides the data directory and `HAZE_LISTEN` the dashboard address.
 ## Dashboard
 
 `haze run` serves the dashboard on `http://127.0.0.1:8480`. Change it with `--listen` or
-`[web] listen`, turn it off with `--no-web`. Everything is inside the binary: no CDN, no Node.
+`[web] listen`, turn it off with `--no-web`. Everything is inside the binary: no CDN, no Node or
+Bun at run time. The client is Preact and TypeScript in `crates/web/ui` (see its README); the
+built `dist/index.html` is committed, so building haze needs only cargo.
 
 - **Targets** (`docs/screenshots/tree.png`): the tree with a status dot per target and group, tag
   filters, the last median and loss, and a small smoke graph per row.
@@ -157,7 +159,11 @@ retried twice.
 ```
 cargo build --release
 cargo test
+cd crates/web/ui && bun install && bun run check
 ```
+
+After changing the dashboard, `bun run build` in `crates/web/ui` and commit `dist/index.html`;
+`cargo test` fails while it is stale.
 
 ## License
 
