@@ -54,10 +54,29 @@ pub struct Storage {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct Web {
+    pub listen: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct NotifyRoute {
+    pub kind: String,
+    pub url: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    pub token: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RawConfig {
     #[serde(default)]
     pub defaults: Settings,
     pub storage: Option<Storage>,
+    pub web: Option<Web>,
+    #[serde(default)]
+    pub notify: Vec<NotifyRoute>,
     #[serde(default)]
     pub alerts: BTreeMap<String, AlertRule>,
     #[serde(default)]
@@ -70,17 +89,36 @@ pub enum ProbeKind {
     Tcp,
     Udp,
     Http,
+    Nostr,
+    Dns,
 }
 
 impl ProbeKind {
-    fn parse(name: &str) -> Result<Self, String> {
+    pub fn parse(name: &str) -> Result<Self, String> {
         Ok(match name {
             "icmp" | "ping" => ProbeKind::Icmp,
             "tcp" => ProbeKind::Tcp,
             "udp" => ProbeKind::Udp,
             "http" | "https" => ProbeKind::Http,
-            other => return Err(format!("`{other}` is not a probe (icmp, tcp, udp, http)")),
+            "nostr" => ProbeKind::Nostr,
+            "dns" => ProbeKind::Dns,
+            other => {
+                return Err(format!(
+                    "`{other}` is not a probe (icmp, tcp, udp, http, nostr, dns)"
+                ));
+            }
         })
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            ProbeKind::Icmp => "icmp",
+            ProbeKind::Tcp => "tcp",
+            ProbeKind::Udp => "udp",
+            ProbeKind::Http => "http",
+            ProbeKind::Nostr => "nostr",
+            ProbeKind::Dns => "dns",
+        }
     }
 }
 
@@ -107,6 +145,9 @@ pub struct Target {
     pub size: usize,
     pub tos: Option<u8>,
     pub port: Option<u16>,
+    pub name: Option<String>,
+    pub record: Option<String>,
+    pub event: Option<String>,
     pub tags: Vec<String>,
     pub alerts: Vec<String>,
     pub depends: Vec<String>,
@@ -116,6 +157,8 @@ pub struct Target {
 pub struct Config {
     pub storage_dir: String,
     pub retention_days: u32,
+    pub listen: Option<String>,
+    pub notify: Vec<NotifyRoute>,
     pub alerts: BTreeMap<String, Alert>,
     pub targets: Vec<Target>,
 }
@@ -135,6 +178,9 @@ struct Node {
     alerts: Vec<String>,
     #[serde(default)]
     depends: Vec<String>,
+    name: Option<String>,
+    record: Option<String>,
+    event: Option<String>,
     #[serde(flatten)]
     settings: Settings,
 }
@@ -210,9 +256,22 @@ impl Config {
             dir: "data".into(),
             retention_days: None,
         });
+        for route in &raw.notify {
+            if !matches!(route.kind.as_str(), "webhook" | "ntfy") {
+                return Err(format!(
+                    "notify kind `{}` is not webhook or ntfy",
+                    route.kind
+                ));
+            }
+            if !(route.url.starts_with("http://") || route.url.starts_with("https://")) {
+                return Err(format!("notify url `{}` is not http or https", route.url));
+            }
+        }
         Ok(Config {
             storage_dir: storage.dir,
             retention_days: storage.retention_days.unwrap_or(400),
+            listen: raw.web.and_then(|w| w.listen),
+            notify: raw.notify,
             alerts,
             targets,
         })
@@ -223,9 +282,9 @@ impl Config {
     }
 }
 
-const NODE_KEYS: [&str; 15] = [
+const NODE_KEYS: [&str; 18] = [
     "title", "host", "url", "tags", "alerts", "depends", "probe", "step", "pings", "timeout",
-    "family", "source", "size", "tos", "port",
+    "family", "source", "size", "tos", "port", "name", "record", "event",
 ];
 
 fn walk(
@@ -279,6 +338,9 @@ fn resolve(path: String, node: Node, inherited: Inherited) -> Result<Target, Str
     let s = inherited.settings;
     let probe = match (&s.probe, &node.url) {
         (Some(p), _) => ProbeKind::parse(p)?,
+        (None, Some(url)) if url.starts_with("ws://") || url.starts_with("wss://") => {
+            ProbeKind::Nostr
+        }
         (None, Some(_)) => ProbeKind::Http,
         (None, None) => ProbeKind::Icmp,
     };
@@ -314,14 +376,54 @@ fn resolve(path: String, node: Node, inherited: Inherited) -> Result<Target, Str
     {
         return Err(format!("target `{path}`: family is 4 or 6, not {f}"));
     }
-    if probe == ProbeKind::Http && node.url.is_none() {
-        return Err(format!("target `{path}`: the http probe needs a url"));
+    let needs_url = matches!(probe, ProbeKind::Http | ProbeKind::Nostr);
+    if needs_url && node.url.is_none() {
+        return Err(format!(
+            "target `{path}`: the {} probe needs a url",
+            probe.name()
+        ));
     }
-    if probe != ProbeKind::Http && node.host.is_none() {
-        return Err(format!("target `{path}`: the {probe:?} probe needs a host"));
+    if !needs_url && node.host.is_none() {
+        return Err(format!(
+            "target `{path}`: the {} probe needs a host",
+            probe.name()
+        ));
+    }
+    if probe == ProbeKind::Nostr
+        && let Some(url) = &node.url
+        && !(url.starts_with("ws://") || url.starts_with("wss://"))
+    {
+        return Err(format!(
+            "target `{path}`: a nostr relay url starts with wss:// or ws://"
+        ));
+    }
+    if let Some(event) = &node.event
+        && (event.len() != 64 || !event.bytes().all(|b| b.is_ascii_hexdigit()))
+    {
+        return Err(format!(
+            "target `{path}`: event must be a 64 character hex event id"
+        ));
+    }
+    if probe == ProbeKind::Dns && node.name.is_none() {
+        return Err(format!(
+            "target `{path}`: the dns probe needs a name to look up"
+        ));
+    }
+    if let Some(record) = &node.record
+        && !matches!(
+            record.to_ascii_uppercase().as_str(),
+            "A" | "AAAA" | "NS" | "MX" | "TXT" | "SOA" | "CNAME"
+        )
+    {
+        return Err(format!(
+            "target `{path}`: record `{record}` is not A, AAAA, NS, MX, TXT, SOA or CNAME"
+        ));
     }
     if matches!(probe, ProbeKind::Tcp | ProbeKind::Udp) && s.port.is_none() {
-        return Err(format!("target `{path}`: the {probe:?} probe needs a port"));
+        return Err(format!(
+            "target `{path}`: the {} probe needs a port",
+            probe.name()
+        ));
     }
     Ok(Target {
         path,
@@ -337,6 +439,9 @@ fn resolve(path: String, node: Node, inherited: Inherited) -> Result<Target, Str
         size: s.size.unwrap_or(56),
         tos: s.tos,
         port: s.port,
+        name: node.name,
+        record: node.record.map(|r| r.to_ascii_uppercase()),
+        event: node.event.map(|e| e.to_ascii_lowercase()),
         tags: inherited.tags,
         alerts: inherited.alerts,
         depends: inherited.depends,
@@ -452,6 +557,66 @@ port = 22
 
     fn error_of(text: &str) -> String {
         Config::parse(text).expect_err("should not parse")
+    }
+
+    #[test]
+    fn web_notify_nostr_and_dns_settings() {
+        let config = Config::parse(
+            r#"
+[web]
+listen = "127.0.0.1:8480"
+
+[[notify]]
+kind = "ntfy"
+url = "https://ntfy.sh/haze-alerts"
+tags = ["dns"]
+
+[[notify]]
+kind = "webhook"
+url = "http://127.0.0.1:9000/hook"
+
+[targets.relay]
+url = "wss://relay.damus.io"
+event = "D7DD5EB3AB747E16F8D0212D53032EA2A7CADEF53837E5A6C66D42849FCB9027"
+
+[targets.lookup]
+probe = "dns"
+host = "1.1.1.1"
+name = "example.com"
+record = "aaaa"
+"#,
+        )
+        .unwrap();
+        assert_eq!(config.listen.as_deref(), Some("127.0.0.1:8480"));
+        assert_eq!(config.notify.len(), 2);
+        assert_eq!(config.notify[0].tags, ["dns"]);
+        let relay = config.target("relay").unwrap();
+        assert_eq!(relay.probe, ProbeKind::Nostr);
+        assert_eq!(
+            relay.event.as_deref(),
+            Some("d7dd5eb3ab747e16f8d0212d53032ea2a7cadef53837e5a6c66d42849fcb9027")
+        );
+        let lookup = config.target("lookup").unwrap();
+        assert_eq!(lookup.probe, ProbeKind::Dns);
+        assert_eq!(lookup.record.as_deref(), Some("AAAA"));
+        assert!(
+            error_of("[targets.a]\nprobe = \"dns\"\nhost = \"1.1.1.1\"").contains("needs a name")
+        );
+        assert!(error_of("[targets.a]\nprobe = \"nostr\"\nurl = \"https://x\"").contains("wss://"));
+        assert!(
+            error_of("[targets.a]\nurl = \"wss://x\"\nevent = \"abc\"").contains("64 character")
+        );
+        assert!(
+            error_of("[targets.a]\nprobe = \"dns\"\nhost = \"x\"\nname = \"y\"\nrecord = \"PTRX\"")
+                .contains("record")
+        );
+        assert!(
+            error_of("[[notify]]\nkind = \"pager\"\nurl = \"http://x\"")
+                .contains("webhook or ntfy")
+        );
+        assert!(
+            error_of("[[notify]]\nkind = \"ntfy\"\nurl = \"ftp://x\"").contains("http or https")
+        );
     }
 
     #[test]
