@@ -125,6 +125,8 @@ fn main() -> Result<()> {
                 name,
                 record: Some(record.to_ascii_uppercase()),
                 event,
+                method: None,
+                allow_aggressive: true,
                 probe: kind,
                 step: (interval * count).max(MIN_STEP),
                 pings: count,
@@ -319,6 +321,16 @@ fn show(dir: &PathBuf, last: Duration, only: Option<&str>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shipped_examples_parse() {
+        for text in [
+            include_str!("../../../examples/haze.toml"),
+            include_str!("../../../examples/live.toml"),
+        ] {
+            Config::parse(text).unwrap();
+        }
+    }
 
     #[test]
     fn scale_rounds_up_to_a_nice_number() {

@@ -1,6 +1,5 @@
 [defaults]
 step = "60s"
-pings = 20
 timeout = "2s"
 
 [storage]
@@ -43,7 +42,6 @@ host = "8.8.8.8"
 [targets.nostr.snort]
 title = "relay.snort.social REQ to EOSE"
 url = "wss://relay.snort.social"
-pings = 5
 timeout = "5s"
 tags = ["nostr"]
 alerts = ["loss"]

@@ -21,6 +21,8 @@ pub struct Settings {
     pub name: Option<String>,
     pub record: Option<String>,
     pub event: Option<String>,
+    pub method: Option<String>,
+    pub allow_aggressive: Option<bool>,
 }
 
 impl Settings {
@@ -38,6 +40,8 @@ impl Settings {
             name: self.name.clone().or_else(|| parent.name.clone()),
             record: self.record.clone().or_else(|| parent.record.clone()),
             event: self.event.clone().or_else(|| parent.event.clone()),
+            method: self.method.clone().or_else(|| parent.method.clone()),
+            allow_aggressive: self.allow_aggressive.or(parent.allow_aggressive),
         }
     }
 }
@@ -126,6 +130,19 @@ impl ProbeKind {
             ProbeKind::Dns => "dns",
         }
     }
+
+    pub fn default_pings(self) -> u32 {
+        match self {
+            ProbeKind::Icmp | ProbeKind::Udp => MAX_PINGS,
+            ProbeKind::Dns => 5,
+            ProbeKind::Tcp => 3,
+            ProbeKind::Http | ProbeKind::Nostr => 1,
+        }
+    }
+
+    pub fn opens_connections(self) -> bool {
+        matches!(self, ProbeKind::Tcp | ProbeKind::Http | ProbeKind::Nostr)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -154,9 +171,44 @@ pub struct Target {
     pub name: Option<String>,
     pub record: Option<String>,
     pub event: Option<String>,
+    pub method: Option<String>,
+    pub allow_aggressive: bool,
     pub tags: Vec<String>,
     pub alerts: Vec<String>,
     pub depends: Vec<String>,
+}
+
+impl Target {
+    pub fn destination(&self) -> String {
+        if let Some(url) = &self.url {
+            let (secure, rest) = match url.split_once("://") {
+                Some((scheme, rest)) => (matches!(scheme, "https" | "wss"), rest),
+                None => (false, url.as_str()),
+            };
+            let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+            let has_port = match authority.rfind(']') {
+                Some(end) => authority[end..].contains(':'),
+                None => authority.contains(':'),
+            };
+            let port = if secure { 443 } else { 80 };
+            return if has_port {
+                authority.to_ascii_lowercase()
+            } else {
+                format!("{}:{port}", authority.to_ascii_lowercase())
+            };
+        }
+        let host = self.host.as_deref().unwrap_or_default().to_ascii_lowercase();
+        let port = self.port.or((self.probe == ProbeKind::Dns).then_some(53));
+        match port {
+            Some(port) if host.contains(':') => format!("[{host}]:{port}"),
+            Some(port) => format!("{host}:{port}"),
+            None => host,
+        }
+    }
+
+    pub fn per_minute(&self) -> f64 {
+        self.pings as f64 * 60.0 / self.step.as_secs_f64()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -171,6 +223,7 @@ pub struct Config {
 
 pub const MIN_STEP: Duration = Duration::from_secs(5);
 pub const MAX_PINGS: u32 = 20;
+pub const POLITE_CONNECTIONS_PER_MINUTE: f64 = 6.0;
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -237,6 +290,7 @@ impl Config {
         };
         let mut targets = Vec::new();
         walk(&raw.targets, "", &root, &mut targets)?;
+        check_politeness(&targets)?;
         for target in &targets {
             for alert in &target.alerts {
                 if !alerts.contains_key(alert) {
@@ -285,10 +339,33 @@ impl Config {
     }
 }
 
-const NODE_KEYS: [&str; 18] = [
+const NODE_KEYS: [&str; 20] = [
     "title", "host", "url", "tags", "alerts", "depends", "probe", "step", "pings", "timeout",
-    "family", "source", "size", "tos", "port", "name", "record", "event",
+    "family", "source", "size", "tos", "port", "name", "record", "event", "method",
+    "allow_aggressive",
 ];
+
+fn check_politeness(targets: &[Target]) -> Result<(), String> {
+    let mut per_host: BTreeMap<String, f64> = BTreeMap::new();
+    for t in targets.iter().filter(|t| t.probe.opens_connections()) {
+        *per_host.entry(t.destination()).or_default() += t.per_minute();
+    }
+    for t in targets.iter().filter(|t| t.probe.opens_connections()) {
+        let rate = per_host[&t.destination()];
+        if !t.allow_aggressive && rate > POLITE_CONNECTIONS_PER_MINUTE + 1e-9 {
+            return Err(format!(
+                "target `{}`: {} would get {} connections a minute from haze, over the {} that \
+                 rate limits and auto-bans tolerate; lower pings or raise step, or set \
+                 allow_aggressive = true on the target",
+                t.path,
+                t.destination(),
+                rate.round(),
+                POLITE_CONNECTIONS_PER_MINUTE,
+            ));
+        }
+    }
+    Ok(())
+}
 
 fn walk(
     table: &toml::Table,
@@ -358,7 +435,7 @@ fn resolve(path: String, node: Node, inherited: Inherited) -> Result<Target, Str
         };
     let step = duration("step", &s.step, Duration::from_secs(60))?;
     let timeout = duration("timeout", &s.timeout, Duration::from_secs(2))?;
-    let pings = s.pings.unwrap_or(MAX_PINGS);
+    let pings = s.pings.unwrap_or(probe.default_pings());
     if step < MIN_STEP {
         return Err(format!(
             "target `{path}`: step must be at least {}s",
@@ -445,6 +522,8 @@ fn resolve(path: String, node: Node, inherited: Inherited) -> Result<Target, Str
         name: s.name,
         record: s.record.map(|r| r.to_ascii_uppercase()),
         event: s.event.map(|e| e.to_ascii_lowercase()),
+        method: s.method.map(|m| m.to_ascii_uppercase()),
+        allow_aggressive: s.allow_aggressive.unwrap_or(false),
         tags: inherited.tags,
         alerts: inherited.alerts,
         depends: inherited.depends,
@@ -458,7 +537,6 @@ mod tests {
     const EXAMPLE: &str = r#"
 [defaults]
 step = "60s"
-pings = 20
 timeout = "2s"
 
 [storage]
@@ -635,6 +713,68 @@ record = "aaaa"
         assert!(
             error_of("[[notify]]\nkind = \"ntfy\"\nurl = \"ftp://x\"").contains("http or https")
         );
+    }
+
+    #[test]
+    fn pings_default_per_probe_kind() {
+        let config = Config::parse(
+            r#"
+[targets.icmp]
+host = "1.1.1.1"
+[targets.udp]
+host = "127.0.0.1"
+probe = "udp"
+port = 7
+[targets.dns]
+host = "1.1.1.1"
+probe = "dns"
+name = "example.com"
+[targets.tcp]
+host = "example.com"
+probe = "tcp"
+port = 443
+[targets.http]
+url = "https://example.com/"
+[targets.nostr]
+url = "wss://relay.snort.social"
+[targets.set]
+url = "https://example.org/"
+pings = 3
+step = "30s"
+"#,
+        )
+        .unwrap();
+        let pings = |p: &str| {
+            let t = config.target(p).unwrap();
+            (t.pings, t.step.as_secs())
+        };
+        assert_eq!(pings("icmp"), (20, 60));
+        assert_eq!(pings("udp"), (20, 60));
+        assert_eq!(pings("dns"), (5, 60));
+        assert_eq!(pings("tcp"), (3, 60));
+        assert_eq!(pings("http"), (1, 60));
+        assert_eq!(pings("nostr"), (1, 60));
+        assert_eq!(pings("set"), (3, 30));
+    }
+
+    #[test]
+    fn aggressive_connection_rates_need_allow_aggressive() {
+        let error = error_of("[targets.a]\nurl = \"https://example.com/\"\npings = 20");
+        assert!(error.contains("`a`"), "{error}");
+        assert!(error.contains("allow_aggressive"), "{error}");
+        assert!(
+            error_of("[targets.a]\nhost = \"x\"\nprobe = \"tcp\"\nport = 443\npings = 2\nstep = \"15s\"")
+                .contains("8 connections a minute")
+        );
+        Config::parse("[defaults]\npings = 20\n[targets.a]\nhost = \"1.1.1.1\"\nprobe = \"dns\"\nname = \"x\"").unwrap();
+        Config::parse("[targets.a]\nurl = \"https://example.com/\"\npings = 6").unwrap();
+        Config::parse("[defaults]\npings = 20\n[targets.a]\nhost = \"1.1.1.1\"").unwrap();
+        let allowed = Config::parse(
+            "[targets.a]\nurl = \"https://example.com/\"\npings = 20\nallow_aggressive = true",
+        )
+        .unwrap();
+        assert_eq!(allowed.targets[0].pings, 20);
+        assert!(allowed.targets[0].allow_aggressive);
     }
 
     #[test]

@@ -49,7 +49,7 @@ host = "8.8.8.8"
 [targets.nostr.snort]
 title = "relay.snort.social REQ to EOSE"
 url = "wss://relay.snort.social"
-pings = 3
+pings = 1
 timeout = "5s"
 tags = ["nostr"]
 alerts = ["loss"]
