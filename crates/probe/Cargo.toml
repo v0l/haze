@@ -6,17 +6,11 @@ license.workspace = true
 
 [dependencies]
 haze-core.workspace = true
-futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 hickory-proto = { version = "0.26", default-features = false, features = ["std"] }
 libc.workspace = true
 rustls.workspace = true
-serde_json = "1.0"
 socket2.workspace = true
 tokio.workspace = true
 tokio-rustls.workspace = true
-tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 webpki-roots.workspace = true
 x509-parser.workspace = true
-
-[dev-dependencies]
-tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }

@@ -20,7 +20,6 @@ pub struct Settings {
     pub port: Option<u16>,
     pub name: Option<String>,
     pub record: Option<String>,
-    pub event: Option<String>,
     pub method: Option<String>,
     pub allow_aggressive: Option<bool>,
     pub hide_address: Option<bool>,
@@ -40,7 +39,6 @@ impl Settings {
             port: self.port.or(parent.port),
             name: self.name.clone().or_else(|| parent.name.clone()),
             record: self.record.clone().or_else(|| parent.record.clone()),
-            event: self.event.clone().or_else(|| parent.event.clone()),
             method: self.method.clone().or_else(|| parent.method.clone()),
             allow_aggressive: self.allow_aggressive.or(parent.allow_aggressive),
             hide_address: self.hide_address.or(parent.hide_address),
@@ -123,7 +121,6 @@ pub enum ProbeKind {
     Tcp,
     Udp,
     Http,
-    Nostr,
     Dns,
     Smtp,
 }
@@ -135,12 +132,11 @@ impl ProbeKind {
             "tcp" => ProbeKind::Tcp,
             "udp" => ProbeKind::Udp,
             "http" | "https" => ProbeKind::Http,
-            "nostr" => ProbeKind::Nostr,
             "dns" => ProbeKind::Dns,
             "smtp" => ProbeKind::Smtp,
             other => {
                 return Err(format!(
-                    "`{other}` is not a probe (icmp, tcp, udp, http, nostr, dns, smtp)"
+                    "`{other}` is not a probe (icmp, tcp, udp, http, dns, smtp)"
                 ));
             }
         })
@@ -152,7 +148,6 @@ impl ProbeKind {
             ProbeKind::Tcp => "tcp",
             ProbeKind::Udp => "udp",
             ProbeKind::Http => "http",
-            ProbeKind::Nostr => "nostr",
             ProbeKind::Dns => "dns",
             ProbeKind::Smtp => "smtp",
         }
@@ -163,15 +158,12 @@ impl ProbeKind {
             ProbeKind::Icmp | ProbeKind::Udp => MAX_PINGS,
             ProbeKind::Dns => 5,
             ProbeKind::Tcp => 3,
-            ProbeKind::Http | ProbeKind::Nostr | ProbeKind::Smtp => 1,
+            ProbeKind::Http | ProbeKind::Smtp => 1,
         }
     }
 
     pub fn opens_connections(self) -> bool {
-        matches!(
-            self,
-            ProbeKind::Tcp | ProbeKind::Http | ProbeKind::Nostr | ProbeKind::Smtp
-        )
+        matches!(self, ProbeKind::Tcp | ProbeKind::Http | ProbeKind::Smtp)
     }
 }
 
@@ -200,7 +192,6 @@ pub struct Target {
     pub port: Option<u16>,
     pub name: Option<String>,
     pub record: Option<String>,
-    pub event: Option<String>,
     pub method: Option<String>,
     pub allow_aggressive: bool,
     pub hide_address: bool,
@@ -439,7 +430,7 @@ impl Config {
     }
 }
 
-const NODE_KEYS: [&str; 21] = [
+const NODE_KEYS: [&str; 20] = [
     "title",
     "host",
     "url",
@@ -457,7 +448,6 @@ const NODE_KEYS: [&str; 21] = [
     "port",
     "name",
     "record",
-    "event",
     "method",
     "allow_aggressive",
     "hide_address",
@@ -535,10 +525,7 @@ fn walk(
 fn resolve(path: String, node: Node, inherited: Inherited) -> Result<Target, String> {
     let s = inherited.settings;
     let probe = match (&s.probe, &node.url) {
-        (Some(p), _) => ProbeKind::parse(p)?,
-        (None, Some(url)) if url.starts_with("ws://") || url.starts_with("wss://") => {
-            ProbeKind::Nostr
-        }
+        (Some(p), _) => ProbeKind::parse(p).map_err(|e| format!("target `{path}`: {e}"))?,
         (None, Some(_)) => ProbeKind::Http,
         (None, None) => ProbeKind::Icmp,
     };
@@ -574,7 +561,7 @@ fn resolve(path: String, node: Node, inherited: Inherited) -> Result<Target, Str
     {
         return Err(format!("target `{path}`: family is 4 or 6, not {f}"));
     }
-    let needs_url = matches!(probe, ProbeKind::Http | ProbeKind::Nostr);
+    let needs_url = probe == ProbeKind::Http;
     if needs_url && node.url.is_none() {
         return Err(format!(
             "target `{path}`: the {} probe needs a url",
@@ -585,21 +572,6 @@ fn resolve(path: String, node: Node, inherited: Inherited) -> Result<Target, Str
         return Err(format!(
             "target `{path}`: the {} probe needs a host",
             probe.name()
-        ));
-    }
-    if probe == ProbeKind::Nostr
-        && let Some(url) = &node.url
-        && !(url.starts_with("ws://") || url.starts_with("wss://"))
-    {
-        return Err(format!(
-            "target `{path}`: a nostr relay url starts with wss:// or ws://"
-        ));
-    }
-    if let Some(event) = &s.event
-        && (event.len() != 64 || !event.bytes().all(|b| b.is_ascii_hexdigit()))
-    {
-        return Err(format!(
-            "target `{path}`: event must be a 64 character hex event id"
         ));
     }
     if probe == ProbeKind::Dns && s.name.is_none() {
@@ -646,7 +618,6 @@ fn resolve(path: String, node: Node, inherited: Inherited) -> Result<Target, Str
         port: s.port,
         name: s.name,
         record: s.record.map(|r| r.to_ascii_uppercase()),
-        event: s.event.map(|e| e.to_ascii_lowercase()),
         method: s.method.map(|m| m.to_ascii_uppercase()),
         allow_aggressive: s.allow_aggressive.unwrap_or(false),
         hide_address: s.hide_address.unwrap_or(false),
@@ -850,7 +821,7 @@ hide_address = false
     }
 
     #[test]
-    fn dns_and_nostr_settings_are_inherited_from_groups() {
+    fn dns_settings_are_inherited_from_groups() {
         let config = Config::parse(
             "[targets.dns]\nprobe = \"dns\"\nname = \"example.com\"\nrecord = \"aaaa\"\n[targets.dns.cloudflare]\nhost = \"1.1.1.1\"\n[targets.dns.google]\nhost = \"8.8.8.8\"\nname = \"example.org\"",
         )
@@ -865,7 +836,7 @@ hide_address = false
     }
 
     #[test]
-    fn web_notify_nostr_and_dns_settings() {
+    fn web_notify_and_dns_settings() {
         let config = Config::parse(
             r#"
 [web]
@@ -880,10 +851,6 @@ tags = ["dns"]
 kind = "webhook"
 url = "http://127.0.0.1:9000/hook"
 
-[targets.relay]
-url = "wss://relay.snort.social"
-event = "D7DD5EB3AB747E16F8D0212D53032EA2A7CADEF53837E5A6C66D42849FCB9027"
-
 [targets.lookup]
 probe = "dns"
 host = "1.1.1.1"
@@ -895,22 +862,14 @@ record = "aaaa"
         assert_eq!(config.listen.as_deref(), Some("127.0.0.1:8480"));
         assert_eq!(config.notify.len(), 2);
         assert_eq!(config.notify[0].tags, ["dns"]);
-        let relay = config.target("relay").unwrap();
-        assert_eq!(relay.probe, ProbeKind::Nostr);
-        assert_eq!(
-            relay.event.as_deref(),
-            Some("d7dd5eb3ab747e16f8d0212d53032ea2a7cadef53837e5a6c66d42849fcb9027")
-        );
         let lookup = config.target("lookup").unwrap();
         assert_eq!(lookup.probe, ProbeKind::Dns);
         assert_eq!(lookup.record.as_deref(), Some("AAAA"));
         assert!(
             error_of("[targets.a]\nprobe = \"dns\"\nhost = \"1.1.1.1\"").contains("needs a name")
         );
-        assert!(error_of("[targets.a]\nprobe = \"nostr\"\nurl = \"https://x\"").contains("wss://"));
-        assert!(
-            error_of("[targets.a]\nurl = \"wss://x\"\nevent = \"abc\"").contains("64 character")
-        );
+        let error = error_of("[targets.relay]\nprobe = \"websocket\"\nurl = \"https://x\"");
+        assert!(error.contains("`relay`") && error.contains("`websocket` is not a probe"));
         assert!(
             error_of("[targets.a]\nprobe = \"dns\"\nhost = \"x\"\nname = \"y\"\nrecord = \"PTRX\"")
                 .contains("record")
@@ -944,8 +903,6 @@ probe = "tcp"
 port = 443
 [targets.http]
 url = "https://example.com/"
-[targets.nostr]
-url = "wss://relay.snort.social"
 [targets.set]
 url = "https://example.org/"
 pings = 3
@@ -962,7 +919,6 @@ step = "30s"
         assert_eq!(pings("dns"), (5, 60));
         assert_eq!(pings("tcp"), (3, 60));
         assert_eq!(pings("http"), (1, 60));
-        assert_eq!(pings("nostr"), (1, 60));
         assert_eq!(pings("set"), (3, 30));
     }
 

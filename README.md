@@ -8,7 +8,7 @@ distribution so a graph of last year shows the same smoke as a graph of the last
 
 ## Status
 
-Early. It runs ICMP, UDP echo, TCP connect, HTTP/HTTPS, Nostr relay and DNS probes, stores every
+Early. It runs ICMP, UDP echo, TCP connect, HTTP/HTTPS and DNS probes, stores every
 step with hourly and daily rollups, evaluates alert rules, sends webhook and ntfy notifications
 and serves a web dashboard from the same binary. There is no agent mode yet; `docs/design.md` has
 the plan.
@@ -19,7 +19,6 @@ the plan.
 haze ping 1.1.1.1 -c 20
 haze ping https://example.com/ --probe http -c 5
 haze ping example.com --probe tcp -p 443
-haze ping wss://relay.snort.social --probe nostr -c 3 -W 5s
 haze ping 8.8.8.8 --probe dns --name example.com --record AAAA
 haze check haze.toml
 haze run haze.toml
@@ -164,10 +163,6 @@ host = "1.1.1.1"
 [targets.dns.google]
 host = "8.8.8.8"
 
-[targets.nostr.snort]
-url = "wss://relay.snort.social"
-timeout = "5s"
-
 [targets.web.example]
 url = "https://example.com/"
 
@@ -176,20 +171,14 @@ host = "mx.example.com"
 probe = "smtp"
 ```
 
-Per target settings: `probe` (`icmp`, `tcp`, `udp`, `http`, `nostr`, `dns`, `smtp`), `step` (at
+Per target settings: `probe` (`icmp`, `tcp`, `udp`, `http`, `dns`, `smtp`), `step` (at
 least 5 s), `pings` (1 to 20), `timeout`, `family` (4 or 6), `source`, `size`, `tos`, `port`,
 `method` (`HEAD` or `GET` for http), `allow_aggressive`, `hide_address`, `tags`, `alerts`,
 `depends`. A `url`
-starting with `https://` or `http://` picks the http probe and one starting with `wss://` or
-`ws://` the nostr probe.
+starting with `https://` or `http://` picks the http probe.
 
 - The **http** probe sends `HEAD` unless `method` is set, and switches to `GET` for good if the
   server answers `HEAD` with 405 or 501. 429 and 503 are recorded as `refused`, not loss.
-- The **nostr** probe connects to the relay, sends a `REQ` for one event id with `limit 1` and
-  times the first `EVENT` or `EOSE`. Set `event` to a 64 character hex id to ask for a known
-  event; the default is an id no relay holds, so the answer is `EOSE`. A relay that answers
-  the WebSocket upgrade with an HTTP error is recorded as `refused` with that status, kept
-  apart from loss.
 - The **dns** probe asks the server in `host` (port 53 unless `port` is set) for `name` with
   `record` (`A`, `AAAA`, `NS`, `MX`, `TXT`, `SOA` or `CNAME`; `A` by default) and times the
   answer. NXDOMAIN counts as an answer; SERVFAIL and REFUSED count as lost.
@@ -199,8 +188,8 @@ starting with `https://` or `http://` picks the http probe and one starting with
 
 ## Being a good neighbour
 
-Every tcp, http, nostr or smtp ping is a full connection, and a service that sees too many from
-one address will rate limit or ban it (fail2ban, Stalwart's auto-ban, Cloudflare, relay limits).
+Every tcp, http or smtp ping is a full connection, and a service that sees too many from
+one address will rate limit or ban it (fail2ban, Stalwart's auto-ban, Cloudflare).
 So haze keeps its connection rate low by default:
 
 | Probe | Default when `pings` is not set |
@@ -208,7 +197,7 @@ So haze keeps its connection rate low by default:
 | icmp, udp | 20 per step (60 s) |
 | dns | 5 per step |
 | tcp | 3 per step |
-| http, nostr, smtp | 1 per step |
+| http, smtp | 1 per step |
 
 - **A cap per host.** All connection targets that share one host and port share one budget of
   6 connections a minute. `haze check` and `haze run` refuse a config that would go over it, and

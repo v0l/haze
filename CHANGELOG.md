@@ -6,12 +6,16 @@ All notable changes to haze are listed here. The format follows
 
 ## [Unreleased]
 
+### Removed
+- The nostr probe, its `event` setting and the `--event` flag of `haze ping`. A config with
+  `probe = "nostr"` now fails `haze check` naming the target.
+
 ### Added
 - ICMP echo over unprivileged datagram sockets, IPv4 and IPv6, with kernel receive timestamps on
   Linux.
 - UDP echo, TCP connect and HTTP/HTTPS probes. HTTP reports DNS, connect, TLS and first byte
   times, the status and the days left on the certificate.
-- A Nostr relay probe that times a `REQ` to its first `EVENT` or `EOSE`, and a DNS probe.
+- A DNS probe.
 - Pings spread across each step, with loss, duplicates, reordering and RFC 3550 jitter.
 - A log bucket histogram within 1% of exact percentiles that merges across steps.
 - A store of one file per target per day, checked record by record so a torn write is dropped,
@@ -21,7 +25,7 @@ All notable changes to haze are listed here. The format follows
 - A multi-arch Docker image at `ghcr.io/v0l/haze` (linux/amd64, linux/arm64), non-root on
   `scratch`, with an ICMP raw socket fallback under `CAP_NET_RAW` and a Compose example.
 - Webhook and ntfy notifications, filtered by tag.
-- Polite connection probes: per probe default rates (1 a minute for http, nostr and smtp, 3 for
+- Polite connection probes: per probe default rates (1 a minute for http and smtp, 3 for
   tcp, 5 for dns), a cap of 6 connections a minute per host unless `allow_aggressive` is set,
   one shared limiter per host and port, backoff on 429, 503, resets and TLS alerts that honours
   `Retry-After` and shows on the dashboard, HEAD requests with a GET fallback, FIN on close and

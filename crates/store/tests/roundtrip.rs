@@ -169,13 +169,13 @@ fn refusals_survive_storage_and_stay_out_of_loss() {
     refused.rtts = vec![None; 4];
     refused.refused = 4;
     let mut store = Store::open(dir.path()).unwrap();
-    store.append("nostr/refusing", &refused).unwrap();
+    store.append("web/refusing", &refused).unwrap();
     store.sync().unwrap();
     assert_eq!(
-        store.steps("nostr/refusing", T0, T0 + DAY).unwrap(),
+        store.steps("web/refusing", T0, T0 + DAY).unwrap(),
         [refused]
     );
-    let buckets = store.query("nostr/refusing", T0, T0 + DAY, DAY).unwrap();
+    let buckets = store.query("web/refusing", T0, T0 + DAY, DAY).unwrap();
     assert_eq!((buckets[0].sent, buckets[0].refused), (4, 4));
     assert_eq!(buckets[0].loss(), 0.0);
 }

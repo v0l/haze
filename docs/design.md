@@ -59,12 +59,8 @@ receive path and timestamps. The ICMP code needed is about 200 lines.
   NXDOMAIN is an answer, SERVFAIL and REFUSED are failures.
 - **Path** (next): mtr style per hop loss and RTT with TTL limited DGRAM probes; `trippy-core`
   is the fallback if hand rolling gets long.
-- **Nostr relay** (built): DNS, TCP connect, TLS, the WebSocket upgrade, then a `REQ` for one
-  event id with `limit 1` timed to the first `EVENT` or `EOSE`, each as a phase. `tokio-tungstenite`
-  over our own TCP and rustls stream so the phases stay separate. Publishing an `EVENT` and timing
-  its `OK` needs a key and writes to the relay, so it waits for the user. A relay that refuses
-  the upgrade (an HTTP error such as 503) is recorded as `refused` with the status, kept out of
-  loss, and makes the target back off.
+- **Refusals** (built): a server that answers 429 or 503 is recorded as `refused` with the status,
+  kept out of loss, and makes the target back off.
 - **TWAMP-light, STUN, QUIC handshake, looking glass** (later): TWAMP-light reflector is a UDP
   probe with timestamps in the payload; STUN binding request is a UDP probe; QUIC via `quinn`;
   the lg.lnvps.cloud check as an HTTP probe with a body matcher.
@@ -80,7 +76,7 @@ histogram (smokeping_prober), or N pings spread over the step.
 
 Choice: N pings spread evenly over the step, each with its own timeout, so the step describes
 the whole interval at the same packet cost. N defaults by probe: 20 per 60 s for icmp and udp,
-5 for dns, 3 for tcp and 1 for http, nostr and smtp, because those pings are whole connections
+5 for dns, 3 for tcp and 1 for http and smtp, because those pings are whole connections
 or queries. Connection pings go at a random point inside their slot (`gap * i + rand(0, gap)`),
 so they never line up with the clock or with each other. Every RTT is kept. Per step we
 record pings sent, the RTT of each sequence number or a loss, duplicates and reordering
@@ -160,13 +156,13 @@ an embedded DejaVu Sans Mono, so it needs no system fonts) and the dashboard's o
 graph looks the same everywhere and can be embedded anywhere.
 
 The client is the user's standard stack: Bun, Vite, Preact and TypeScript (strict), in
-`crates/web/ui`, laid out like nostrsearch's dashboard. `vite-plugin-singlefile` inlines the
+`crates/web/ui`, laid out as a standard Vite app. `vite-plugin-singlefile` inlines the
 script, styles and icon into one `dist/index.html` that the server embeds with `include_str!`,
 so there are no asset routes and the API and UI cannot drift apart. `src/types.ts` mirrors the
 Rust JSON. A first cut was a hand-written module with no build step; the user chose the standard
 stack instead.
 
-nostrsearch keeps `dist` out of git and has `build.rs` fail until the bundle is built. haze
+Keeping `dist` out of git and failing `build.rs` until the bundle is built is the usual choice. haze
 commits `dist/index.html` instead, so `cargo build`, `cargo test` and `cargo install` work on a
 machine without Bun (the release builders, the Pi, a contributor who only touches Rust). The
 price is a build output in git that could go stale, so the build stamps a hash of every input
@@ -214,16 +210,15 @@ Dependencies: a target's `depends` names another target; while that one has an a
 child's alerts are held. Maintenance windows silence by tag or path for a time range.
 
 Routes: webhook (JSON) and ntfy are built, each filtered by tags, retried twice on server
-errors and sent from a queue so a slow endpoint never holds up probing. Next: Nostr DM (NIP-17)
-from a haze key, SMTP, Telegram, and a severity filter.
+errors and sent from a queue so a slow endpoint never holds up probing. Next: SMTP,
+Telegram, and a severity filter.
 
 ## 6. Distributed
 
 Options: SmokePing style HTTP with a shared secret, mTLS, Noise, or signed requests over HTTPS.
 
-Choice: `haze agent` is the same binary in agent mode. It has a secp256k1 key (a Nostr key,
-so the user's tooling and NIP-98 style HTTP auth apply) and the server allowlists agent public
-keys. The agent fetches its assignment (the targets tagged for it) and pushes batches of step
+Choice: `haze agent` is the same binary in agent mode. It has an Ed25519 key and the server
+allowlists agent public keys. The agent fetches its assignment (the targets tagged for it) and pushes batches of step
 records as signed HTTPS requests. It writes every step to its own local store first and keeps a
 cursor of the last record the server acknowledged, so being offline is just a gap in the
 acknowledgements and back filling is sending from the cursor. The server stores agent data as

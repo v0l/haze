@@ -5,7 +5,6 @@ pub mod http;
 pub mod icmp;
 pub mod limit;
 pub mod net;
-pub mod nostr;
 pub mod smtp;
 pub mod tcp;
 pub mod udp;
@@ -72,12 +71,6 @@ pub async fn build(target: &Target) -> Result<Arc<dyn Probe>, String> {
             )?
             .with_method(target.method.as_deref())?,
         ),
-        ProbeKind::Nostr => Arc::new(nostr::Relay::new(
-            target.url.as_deref().unwrap_or_default(),
-            target.event.as_deref(),
-            target.family,
-            &options,
-        )?),
         ProbeKind::Dns => Arc::new(dns::Dns::new(
             SocketAddr::new(address().await?, target.port.unwrap_or(53)),
             target.name.as_deref().unwrap_or_default(),

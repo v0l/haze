@@ -38,14 +38,12 @@ enum Command {
         interval: Duration,
         #[arg(short = 'W', long, default_value = "2s", value_parser = parse_duration)]
         timeout: Duration,
-        #[arg(long, value_parser = ["icmp", "tcp", "udp", "http", "nostr", "dns", "smtp"], default_value = "icmp")]
+        #[arg(long, value_parser = ["icmp", "tcp", "udp", "http", "dns", "smtp"], default_value = "icmp")]
         probe: String,
         #[arg(long, help = "Name to look up with the dns probe")]
         name: Option<String>,
         #[arg(long, help = "Record type for the dns probe", default_value = "A")]
         record: String,
-        #[arg(long, help = "Event id the nostr probe asks for")]
-        event: Option<String>,
         #[arg(short = 'p', long)]
         port: Option<u16>,
         #[arg(short = '4', conflicts_with = "ipv6")]
@@ -101,7 +99,6 @@ fn main() -> Result<()> {
             probe,
             name,
             record,
-            event,
             port,
             ipv4,
             ipv6,
@@ -113,7 +110,7 @@ fn main() -> Result<()> {
                 bail!("count must be 1 to {}", haze_core::config::MAX_PINGS);
             }
             let kind = ProbeKind::parse(&probe).map_err(anyhow::Error::msg)?;
-            let by_url = matches!(kind, ProbeKind::Http | ProbeKind::Nostr);
+            let by_url = matches!(kind, ProbeKind::Http);
             if kind == ProbeKind::Dns && name.is_none() {
                 bail!("the dns probe needs --name");
             }
@@ -124,7 +121,6 @@ fn main() -> Result<()> {
                 url: by_url.then(|| host.clone()),
                 name,
                 record: Some(record.to_ascii_uppercase()),
-                event,
                 method: None,
                 allow_aggressive: true,
                 hide_address: false,

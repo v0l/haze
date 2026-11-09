@@ -38,10 +38,3 @@ host = "1.1.1.1"
 
 [targets.dns.google]
 host = "8.8.8.8"
-
-[targets.nostr.snort]
-title = "relay.snort.social REQ to EOSE"
-url = "wss://relay.snort.social"
-timeout = "5s"
-tags = ["nostr"]
-alerts = ["loss"]

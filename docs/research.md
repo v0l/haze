@@ -85,8 +85,7 @@ targets.
 - Continuous, spread out sampling rather than a burst (smokeping_prober, Netdata).
 - HTTP phase timings and certificate expiry (blackbox_exporter).
 - Readable conditions in config (Gatus), and SmokePing patterns for people moving over.
-- Notification targets that people use today: ntfy, Telegram, webhook, SMTP (Uptime Kuma), and
-  Nostr DMs for this user's stack.
+- Notification targets that people use today: ntfy, Telegram, webhook and SMTP (Uptime Kuma).
 - Reload on SIGHUP and on an HTTP call (smokeping_prober).
 - Per hop timeline for incidents (PingPlotter, trippy).
 - Agents that buffer and back fill (SmokePing slaves), with modern signing.
@@ -111,7 +110,6 @@ Versions and all time downloads from crates.io on the day of writing.
 | KV stores | `redb` 4.5 (16 M), `fjall` 3.1 (2 M), `sled` 0.34 (unmaintained beta) | redb is a copy-on-write B-tree with ACID commits, a good fit for metadata. fjall is an LSM, good for heavy writes. |
 | Columnar | `duckdb` 1.2 | Very good for ad hoc analytics, but a C++ build that is slow and hard on musl and cross targets. |
 | HTTP probe | `tokio-rustls` with `rustls` (ring) and `webpki-roots`; `x509-parser` | Separate timings for connect, TLS and first byte need our own client rather than `reqwest`. |
-| WebSocket | `tokio-tungstenite` 0.30 | Nostr relay probe. |
 | Config | `toml` 1.2, `kdl` 6.7 | Both fine. |
 | Reload | `notify` 8.2 | File watching for live reload. |
 

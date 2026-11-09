@@ -131,7 +131,6 @@ mod tests {
     fn url_hosts() {
         assert_eq!(url_host("https://10.97.0.5:8006/api"), "10.97.0.5");
         assert_eq!(url_host("http://[fd97::5]:80/"), "fd97::5");
-        assert_eq!(url_host("wss://relay.snort.social"), "relay.snort.social");
         assert_eq!(url_host("https://user:pw@lnvps.net/?x"), "lnvps.net");
         assert_eq!(url_host("https://lnvps.net#a"), "lnvps.net");
     }
