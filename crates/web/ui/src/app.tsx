@@ -67,7 +67,7 @@ export function App() {
           t.path !== event.target
             ? t
             : event.kind === "step"
-              ? { ...t, status: event.status, last: event.last }
+              ? { ...t, status: event.status, last: event.last, backoff: event.backoff }
               : {
                   ...t,
                   status: event.status,

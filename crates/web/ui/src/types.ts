@@ -13,6 +13,11 @@ export interface LastStep {
   jitter_ms: number | null;
 }
 
+export interface BackingOff {
+  reason: string;
+  next_in_ms: number;
+}
+
 export interface TargetView {
   path: string;
   title: string | null;
@@ -26,6 +31,7 @@ export interface TargetView {
   status: Status;
   active: string[];
   last: LastStep | null;
+  backoff: BackingOff | null;
 }
 
 export interface TargetsResponse {
@@ -83,5 +89,5 @@ export interface AlertsResponse {
 }
 
 export type LiveEvent =
-  | { kind: "step"; target: string; status: Status; last: LastStep }
+  | { kind: "step"; target: string; status: Status; last: LastStep; backoff: BackingOff | null }
   | { kind: "alert"; target: string; status: Status; record: AlertRecord };

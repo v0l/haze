@@ -2,7 +2,7 @@ import { useEffect, useState } from "preact/hooks";
 import { api } from "../api";
 import { Graph } from "../components/Graph";
 import { RangeBar } from "../components/RangeBar";
-import { IncidentTable, LastStepTable } from "../components/Tables";
+import { BackoffNote, IncidentTable, LastStepTable } from "../components/Tables";
 import { Card, StatusDot, TagChips } from "../components/bits";
 import { shareLink } from "../route";
 import { useDash } from "../state";
@@ -66,6 +66,7 @@ export function TargetPage({ path }: { path: string }) {
         <div class="tags">
           <TagChips tags={t.tags} active={null} />
         </div>
+        <BackoffNote backoff={t.backoff} />
       </div>
       <RangeBar />
       <Card>

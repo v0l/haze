@@ -92,6 +92,7 @@ h2 { font-size: 15px; margin: 0 0 10px; color: var(--muted); font-weight: 600; }
 .muted { color: var(--muted); }
 .small { font-size: 12px; }
 .bad { color: var(--down); font-weight: 600; }
+.backoff { color: var(--alert); border: 1px solid var(--alert); border-radius: 999px; padding: 1px 8px; white-space: nowrap; }
 .error { color: var(--down); }
 
 .summary { display: flex; gap: 8px; flex-wrap: wrap; }

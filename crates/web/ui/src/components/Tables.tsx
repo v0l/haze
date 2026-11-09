@@ -1,6 +1,15 @@
 import { ago, duration, fmt, pct, stamp } from "../format";
 import { useDash } from "../state";
-import type { Incident, LastStep } from "../types";
+import type { BackingOff, Incident, LastStep } from "../types";
+
+export function backoffText(b: BackingOff): string {
+  return `backing off: ${b.reason}, next step in ${duration(b.next_in_ms)}`;
+}
+
+export function BackoffNote({ backoff }: { backoff: BackingOff | null }) {
+  if (!backoff) return null;
+  return <span class="backoff small">{backoffText(backoff)}</span>;
+}
 
 export function LastStepTable({ last }: { last: LastStep | null }) {
   if (!last) return <p class="muted">No step has finished yet.</p>;
