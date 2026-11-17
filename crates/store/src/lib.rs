@@ -9,7 +9,7 @@ use haze_core::{Histogram, Step};
 const DAY_MS: i64 = 86_400_000;
 const BIN_MS: i64 = 1_800_000;
 const ROLLUP_EXTENSION: &str = "hzs";
-const OLD_ROLLUP_EXTENSION: &str = "hzr";
+const OLD_ROLLUP_EXTENSIONS: [&str; 1] = ["hzr"];
 const LOST: u32 = u32::MAX;
 const FIXED: usize = 8 + 4 + 2 + 2 + 2 + 2;
 const EXTENSION: &str = "haze";
@@ -481,7 +481,9 @@ impl Store {
         file.write_all(&rollup.encode())?;
         file.sync_data()?;
         fs::rename(&partial, &path)?;
-        let _ = fs::remove_file(path.with_extension(OLD_ROLLUP_EXTENSION));
+        for old in OLD_ROLLUP_EXTENSIONS {
+            let _ = fs::remove_file(path.with_extension(old));
+        }
         Ok(rollup)
     }
 
@@ -509,7 +511,9 @@ impl Store {
                     fs::remove_file(self.day_file(&target, day))?;
                     let rollup = self.rollup_file(&target, day);
                     let _ = fs::remove_file(&rollup);
-                    let _ = fs::remove_file(rollup.with_extension(OLD_ROLLUP_EXTENSION));
+                    for old in OLD_ROLLUP_EXTENSIONS {
+                        let _ = fs::remove_file(rollup.with_extension(old));
+                    }
                     removed += 1;
                 }
             }

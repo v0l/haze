@@ -2,9 +2,10 @@ pub mod graph;
 pub mod hub;
 
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::convert::Infallible;
-use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::Router;
 use axum::extract::{Path, Query, State};
@@ -23,6 +24,11 @@ const DEFAULT_SPAN: i64 = 3 * 3_600_000;
 const MAX_SPAN: i64 = 800 * 86_400_000;
 const MAX_POINTS: i64 = 4000;
 const RECENT_ALERTS: usize = 500;
+const SERIES_TTL: Duration = Duration::from_secs(10);
+const SERIES_CACHE_LIMIT: usize = 256;
+
+type SeriesKey = (String, i64, i64, i64);
+type SeriesCache = Mutex<HashMap<SeriesKey, (Instant, Arc<Series>)>>;
 
 static INDEX: &str = include_str!("../ui/dist/index.html");
 static ICON: &str = include_str!("../ui/src/icon.svg");
@@ -32,6 +38,7 @@ pub struct App {
     hub: Arc<Hub>,
     store: Arc<Store>,
     addresses: Arc<BTreeMap<String, String>>,
+    series_cache: Arc<SeriesCache>,
 }
 
 pub fn now_ms() -> i64 {
@@ -56,6 +63,7 @@ pub fn router(hub: Arc<Hub>) -> std::io::Result<Router> {
         hub,
         store,
         addresses: Arc::new(addresses),
+        series_cache: Arc::default(),
     };
     Ok(Router::new()
         .route(
@@ -207,14 +215,29 @@ impl App {
         Ok(Window { from, to, step })
     }
 
-    async fn series(&self, target: &str, window: &Window) -> Result<Series, ApiError> {
+    async fn series(&self, target: &str, window: &Window) -> Result<Arc<Series>, ApiError> {
+        let key = (target.to_string(), window.from, window.to, window.step);
+        if let Some((at, hit)) = self.series_cache.lock().unwrap().get(&key)
+            && at.elapsed() < SERIES_TTL
+        {
+            return Ok(hit.clone());
+        }
         let store = self.store.clone();
-        let target = target.to_string();
+        let name = target.to_string();
         let (from, to, step) = (window.from, window.to, window.step);
-        tokio::task::spawn_blocking(move || graph::series(&store, &target, from, to, step))
-            .await
-            .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-            .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+        let series =
+            tokio::task::spawn_blocking(move || graph::series(&store, &name, from, to, step))
+                .await
+                .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+                .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let series = Arc::new(series);
+        let mut cache = self.series_cache.lock().unwrap();
+        cache.retain(|_, (at, _)| at.elapsed() < SERIES_TTL);
+        if cache.len() >= SERIES_CACHE_LIMIT {
+            cache.clear();
+        }
+        cache.insert(key, (Instant::now(), series.clone()));
+        Ok(series)
     }
 }
 
@@ -291,7 +314,7 @@ async fn series(
 ) -> Reply {
     app.known(&target)?;
     let window = app.window(&range, app.min_step(&target))?;
-    let body = serde_json::to_string(&app.series(&target, &window).await?)
+    let body = serde_json::to_string(&*app.series(&target, &window).await?)
         .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(cached(&headers, "application/json", window.step, body))
 }
@@ -352,7 +375,7 @@ async fn compare(
     let window = app.window(&range, min_step)?;
     let mut list = Vec::new();
     for name in &names {
-        list.push(app.series(name, &window).await?);
+        list.push((*app.series(name, &window).await?).clone());
     }
     image(
         &headers,

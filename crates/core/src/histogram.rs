@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::time::Duration;
 
 pub const GROWTH: f64 = 1.02;
@@ -6,7 +5,7 @@ pub const RELATIVE_ERROR: f64 = (GROWTH - 1.0) / (GROWTH + 1.0);
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Histogram {
-    buckets: BTreeMap<i32, u64>,
+    buckets: Vec<(i32, u64)>,
     count: u64,
     sum_us: f64,
     min_us: f64,
@@ -32,7 +31,7 @@ impl Histogram {
 
     pub fn record(&mut self, value: Duration) {
         let us = value.as_nanos() as f64 / 1e3;
-        *self.buckets.entry(bucket_of(us)).or_insert(0) += 1;
+        self.add(bucket_of(us), 1);
         if self.count == 0 {
             self.min_us = us;
             self.max_us = us;
@@ -44,13 +43,54 @@ impl Histogram {
         self.sum_us += us;
     }
 
+    fn add(&mut self, index: i32, count: u64) {
+        match self.buckets.binary_search_by_key(&index, |b| b.0) {
+            Ok(at) => self.buckets[at].1 += count,
+            Err(at) => self.buckets.insert(at, (index, count)),
+        }
+    }
+
+    fn merge_buckets(&mut self, other: &[(i32, u64)]) {
+        if self.buckets.is_empty() {
+            self.buckets.extend_from_slice(other);
+            return;
+        }
+        let mut merged = Vec::with_capacity(self.buckets.len() + other.len());
+        let (mut a, mut b) = (self.buckets.iter().peekable(), other.iter().peekable());
+        loop {
+            match (a.peek(), b.peek()) {
+                (Some(x), Some(y)) if x.0 == y.0 => {
+                    merged.push((x.0, x.1 + y.1));
+                    a.next();
+                    b.next();
+                }
+                (Some(x), Some(y)) if x.0 < y.0 => {
+                    merged.push(**x);
+                    a.next();
+                }
+                (Some(_), Some(y)) => {
+                    merged.push(**y);
+                    b.next();
+                }
+                (Some(x), None) => {
+                    merged.push(**x);
+                    a.next();
+                }
+                (None, Some(y)) => {
+                    merged.push(**y);
+                    b.next();
+                }
+                (None, None) => break,
+            }
+        }
+        self.buckets = merged;
+    }
+
     pub fn merge(&mut self, other: &Histogram) {
         if other.count == 0 {
             return;
         }
-        for (index, count) in &other.buckets {
-            *self.buckets.entry(*index).or_insert(0) += count;
-        }
+        self.merge_buckets(&other.buckets);
         if self.count == 0 {
             self.min_us = other.min_us;
             self.max_us = other.max_us;
@@ -142,12 +182,15 @@ impl Histogram {
         let max_us = f64_at(24)?;
         let entries = u32::from_le_bytes(take(32, 4)?.try_into().unwrap()) as usize;
         let mut at = 36;
-        let mut buckets = BTreeMap::new();
+        let mut buckets: Vec<(i32, u64)> = Vec::with_capacity(entries.min(4096));
         let mut total = 0u64;
         for _ in 0..entries {
             let index = i32::from_le_bytes(take(at, 4)?.try_into().unwrap());
             let n = u64_at(at + 4)?;
-            buckets.insert(index, n);
+            if buckets.last().is_some_and(|last| last.0 >= index) {
+                return None;
+            }
+            buckets.push((index, n));
             total = total.checked_add(n)?;
             at += 12;
         }

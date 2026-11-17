@@ -109,6 +109,8 @@ fn hourly_and_daily_rollups_match_raw_queries() {
     let raw_hours = store.query("t", START, START + 3 * DAY, HOUR).unwrap();
     let raw_days = store.query("t", START, START + 3 * DAY, DAY).unwrap();
     let raw_halves = store.query("t", START, START + 3 * DAY, HOUR / 2).unwrap();
+    let raw_fives = store.query("t", START, START + 3 * DAY, 300_000).unwrap();
+    let raw_fifteens = store.query("t", START, START + 3 * DAY, 900_000).unwrap();
     let odd_width = store
         .query("t", START, START + 3 * DAY, 7 * 60_000)
         .unwrap();
@@ -124,6 +126,14 @@ fn hourly_and_daily_rollups_match_raw_queries() {
     assert_eq!(
         store.query("t", START, START + 3 * DAY, HOUR / 2).unwrap(),
         raw_halves
+    );
+    assert_eq!(
+        store.query("t", START, START + 3 * DAY, 300_000).unwrap(),
+        raw_fives
+    );
+    assert_eq!(
+        store.query("t", START, START + 3 * DAY, 900_000).unwrap(),
+        raw_fifteens
     );
     assert_eq!(
         store
