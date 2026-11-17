@@ -1,3 +1,4 @@
+use std::sync::OnceLock;
 use std::time::Duration;
 
 pub const GROWTH: f64 = 1.02;
@@ -19,6 +20,13 @@ fn bucket_of(us: f64) -> i32 {
     (us.ln() / GROWTH.ln()).floor() as i32
 }
 
+const TABLE_US: usize = 1 << 17;
+
+fn small_table() -> &'static [i16] {
+    static TABLE: OnceLock<Vec<i16>> = OnceLock::new();
+    TABLE.get_or_init(|| (0..TABLE_US).map(|us| bucket_of(us as f64) as i16).collect())
+}
+
 fn representative(index: i32) -> f64 {
     let low = GROWTH.powi(index);
     2.0 * low * GROWTH / (1.0 + GROWTH)
@@ -30,8 +38,14 @@ impl Histogram {
     }
 
     pub fn record(&mut self, value: Duration) {
-        let us = value.as_nanos() as f64 / 1e3;
-        self.add(bucket_of(us), 1);
+        let nanos = value.as_nanos();
+        let us = nanos as f64 / 1e3;
+        let index = if nanos % 1000 == 0 && nanos / 1000 < TABLE_US as u128 {
+            small_table()[(nanos / 1000) as usize] as i32
+        } else {
+            bucket_of(us)
+        };
+        self.add(index, 1);
         if self.count == 0 {
             self.min_us = us;
             self.max_us = us;
@@ -222,6 +236,15 @@ pub fn exact_quantile(sorted: &[Duration], q: f64) -> Option<Duration> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn table_lookup_matches_the_formula_for_whole_microseconds() {
+        for us in (0..TABLE_US as u64).chain([TABLE_US as u64, 1_000_000, 5_000_000]) {
+            let mut h = Histogram::new();
+            h.record(Duration::from_micros(us));
+            assert_eq!(h.buckets, vec![(bucket_of(us as f64), 1)], "{us} us");
+        }
+    }
 
     struct Lcg(u64);
 

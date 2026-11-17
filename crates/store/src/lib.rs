@@ -42,16 +42,18 @@ impl Bucket {
 }
 
 impl Bucket {
-    pub fn absorb_step(&mut self, step: &Step) {
+    fn absorb_raw(&mut self, step: &RawStep) {
         self.steps += 1;
-        self.sent += step.sent() as u64;
-        self.received += step.received() as u64;
+        self.sent += (step.rtts.len() / 4) as u64;
         self.refused += step.refused as u64;
         self.duplicates += step.duplicates as u64;
-        step.rtts
-            .iter()
-            .flatten()
-            .for_each(|r| self.histogram.record(*r));
+        for chunk in step.rtts.as_chunks::<4>().0 {
+            let us = u32::from_le_bytes(*chunk);
+            if us != LOST {
+                self.received += 1;
+                self.histogram.record(Duration::from_micros(us as u64));
+            }
+        }
     }
 
     pub fn absorb(&mut self, other: &Bucket) {
@@ -253,6 +255,39 @@ pub fn read_records(bytes: &[u8]) -> (Vec<Step>, usize) {
     (steps, at)
 }
 
+struct RawStep<'a> {
+    start_ms: i64,
+    duplicates: u32,
+    refused: u32,
+    rtts: &'a [u8],
+}
+
+fn scan_records(bytes: &[u8], mut visit: impl FnMut(RawStep)) {
+    let mut at = 0;
+    while at + 8 <= bytes.len() {
+        let len = u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()) as usize;
+        let crc = u32::from_le_bytes(bytes[at + 4..at + 8].try_into().unwrap());
+        let Some(payload) = bytes.get(at + 8..at + 8 + len) else {
+            return;
+        };
+        if payload.len() < FIXED || crc32fast::hash(payload) != crc {
+            return;
+        }
+        let u16_at = |i: usize| u16::from_le_bytes([payload[i], payload[i + 1]]);
+        let sent = u16_at(12) as usize;
+        if payload.len() != FIXED + sent * 4 {
+            return;
+        }
+        visit(RawStep {
+            start_ms: i64::from_le_bytes(payload[0..8].try_into().unwrap()),
+            duplicates: u16_at(14) as u32,
+            refused: u16_at(18) as u32,
+            rtts: &payload[FIXED..],
+        });
+        at += 8 + len;
+    }
+}
+
 pub fn check_path(target: &str) -> io::Result<()> {
     let bad = target.is_empty()
         || target.split('/').any(|part| {
@@ -423,13 +458,12 @@ impl Store {
             let needs_raw = rollup.is_none() || from_ms > day_start || to_ms < day_end;
             if needs_raw {
                 let bytes = fs::read(self.day_file(target, day))?;
-                let (records, _) = read_records(&bytes);
-                for step in records
-                    .iter()
-                    .filter(|s| s.start_ms >= from_ms && s.start_ms < to_ms && !covered(s.start_ms))
-                {
-                    entry(&mut out, slot(step.start_ms)).absorb_step(step);
-                }
+                scan_records(&bytes, |step| {
+                    if step.start_ms >= from_ms && step.start_ms < to_ms && !covered(step.start_ms)
+                    {
+                        entry(&mut out, slot(step.start_ms)).absorb_raw(&step);
+                    }
+                });
             }
         }
         let buckets: Vec<Bucket> = out.into_values().collect();
