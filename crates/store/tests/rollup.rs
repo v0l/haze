@@ -61,7 +61,7 @@ fn a_seven_day_query_over_rollups_keeps_percentiles_within_the_bucket_error() {
     let written = store.rollup_closed_days(START + 7 * DAY + HOUR).unwrap();
     assert_eq!(written, 7);
     for day in 0..7 {
-        let name = format!("{}.hzr", date_name(START / DAY + day));
+        let name = format!("{}.hzs", date_name(START / DAY + day));
         assert!(dir.path().join("t").join(name).exists());
     }
     std::fs::write(
@@ -108,6 +108,7 @@ fn hourly_and_daily_rollups_match_raw_queries() {
     fill(&mut store, "t", 3, 300_000, 5);
     let raw_hours = store.query("t", START, START + 3 * DAY, HOUR).unwrap();
     let raw_days = store.query("t", START, START + 3 * DAY, DAY).unwrap();
+    let raw_halves = store.query("t", START, START + 3 * DAY, HOUR / 2).unwrap();
     let odd_width = store
         .query("t", START, START + 3 * DAY, 7 * 60_000)
         .unwrap();
@@ -119,6 +120,10 @@ fn hourly_and_daily_rollups_match_raw_queries() {
     assert_eq!(
         store.query("t", START, START + 3 * DAY, DAY).unwrap(),
         raw_days
+    );
+    assert_eq!(
+        store.query("t", START, START + 3 * DAY, HOUR / 2).unwrap(),
+        raw_halves
     );
     assert_eq!(
         store
@@ -135,7 +140,7 @@ fn hourly_and_daily_rollups_match_raw_queries() {
             let _ = std::fs::remove_file(
                 dir.path()
                     .join("t")
-                    .join(format!("{}.hzr", date_name(START / DAY + day))),
+                    .join(format!("{}.hzs", date_name(START / DAY + day))),
             );
         }
         fresh
@@ -175,41 +180,11 @@ fn a_corrupt_rollup_falls_back_to_raw_steps() {
     let path = dir
         .path()
         .join("t")
-        .join(format!("{}.hzr", date_name(START / DAY)));
+        .join(format!("{}.hzs", date_name(START / DAY)));
     let mut bytes = std::fs::read(&path).unwrap();
     let last = bytes.len() - 1;
     bytes[last] ^= 0xff;
     std::fs::write(&path, bytes).unwrap();
     assert_eq!(store.query("t", START, START + DAY, DAY).unwrap(), raw);
     assert_eq!(store.targets().unwrap(), ["t"]);
-}
-
-#[test]
-fn repeated_unaligned_queries_over_closed_days_read_each_day_once() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut store = Store::open(dir.path()).unwrap();
-    fill(&mut store, "t", 4, 60_000, 21);
-    store.rollup_closed_days(START + 4 * DAY).unwrap();
-    let width = 30 * 60_000;
-    let from = START + 90 * 60_000;
-    let first = store.query("t", from, START + 4 * DAY, width).unwrap();
-    let reads = store.day_reads();
-    assert!(reads > 0);
-    let second = store.query("t", from, START + 4 * DAY, width).unwrap();
-    assert_eq!(store.day_reads(), reads);
-    assert_eq!(first, second);
-
-    let fresh = Store::open(dir.path()).unwrap();
-    for day in 0..4 {
-        std::fs::remove_file(
-            dir.path()
-                .join("t")
-                .join(format!("{}.hzr", date_name(START / DAY + day))),
-        )
-        .unwrap();
-    }
-    assert_eq!(
-        fresh.query("t", from, START + 4 * DAY, width).unwrap(),
-        first
-    );
 }

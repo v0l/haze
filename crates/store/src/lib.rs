@@ -1,28 +1,22 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use haze_core::{Histogram, Step};
 
 const DAY_MS: i64 = 86_400_000;
-const HOUR_MS: i64 = 3_600_000;
-const ROLLUP_EXTENSION: &str = "hzr";
+const BIN_MS: i64 = 1_800_000;
+const ROLLUP_EXTENSION: &str = "hzs";
+const OLD_ROLLUP_EXTENSION: &str = "hzr";
 const LOST: u32 = u32::MAX;
 const FIXED: usize = 8 + 4 + 2 + 2 + 2 + 2;
 const EXTENSION: &str = "haze";
-const DAY_CACHE_LIMIT: usize = 4096;
-
-type DayKey = (String, i64, i64, u128);
 
 pub struct Store {
     root: PathBuf,
     open: HashMap<(String, i64), File>,
-    day_cache: Mutex<HashMap<DayKey, Arc<Vec<Bucket>>>>,
-    day_reads: AtomicU64,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -48,6 +42,18 @@ impl Bucket {
 }
 
 impl Bucket {
+    pub fn absorb_step(&mut self, step: &Step) {
+        self.steps += 1;
+        self.sent += step.sent() as u64;
+        self.received += step.received() as u64;
+        self.refused += step.refused as u64;
+        self.duplicates += step.duplicates as u64;
+        step.rtts
+            .iter()
+            .flatten()
+            .for_each(|r| self.histogram.record(*r));
+    }
+
     pub fn absorb(&mut self, other: &Bucket) {
         self.steps += other.steps;
         self.sent += other.sent;
@@ -89,15 +95,15 @@ impl Bucket {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Rollup {
     pub day: Bucket,
-    pub hours: Vec<Bucket>,
+    pub bins: Vec<Bucket>,
 }
 
 impl Rollup {
     fn encode(&self) -> Vec<u8> {
         let mut payload = Vec::new();
-        payload.extend_from_slice(&(self.hours.len() as u32).to_le_bytes());
+        payload.extend_from_slice(&(self.bins.len() as u32).to_le_bytes());
         self.day.encode(&mut payload);
-        self.hours.iter().for_each(|h| h.encode(&mut payload));
+        self.bins.iter().for_each(|h| h.encode(&mut payload));
         let mut out = crc32fast::hash(&payload).to_le_bytes().to_vec();
         out.extend_from_slice(&payload);
         out
@@ -109,24 +115,31 @@ impl Rollup {
         if crc32fast::hash(payload) != crc {
             return None;
         }
-        let hours = u32::from_le_bytes(payload.get(..4)?.try_into().unwrap()) as usize;
+        let count = u32::from_le_bytes(payload.get(..4)?.try_into().unwrap()) as usize;
         let mut at = 4;
         let (day, used) = Bucket::decode(&payload[at..])?;
         at += used;
-        let mut list = Vec::with_capacity(hours.min(24));
-        for _ in 0..hours {
-            let (hour, used) = Bucket::decode(&payload[at..])?;
+        let mut list = Vec::with_capacity(count.min(48));
+        for _ in 0..count {
+            let (bin, used) = Bucket::decode(&payload[at..])?;
             at += used;
-            list.push(hour);
+            list.push(bin);
         }
-        Some(Rollup { day, hours: list })
+        Some(Rollup { day, bins: list })
     }
 }
 
 #[derive(Clone, Copy, PartialEq)]
 enum Tier {
-    Hour,
+    Bin,
     Day,
+}
+
+fn entry(map: &mut BTreeMap<i64, Bucket>, start_ms: i64) -> &mut Bucket {
+    map.entry(start_ms).or_insert_with(|| Bucket {
+        start_ms,
+        ..Bucket::default()
+    })
 }
 
 fn bucket_of_step(step: &Step) -> Bucket {
@@ -261,54 +274,7 @@ impl Store {
         Ok(Store {
             root,
             open: HashMap::new(),
-            day_cache: Mutex::new(HashMap::new()),
-            day_reads: AtomicU64::new(0),
         })
-    }
-
-    pub fn day_reads(&self) -> u64 {
-        self.day_reads.load(Ordering::Relaxed)
-    }
-
-    fn closed_day_buckets(
-        &self,
-        target: &str,
-        day: i64,
-        width: i64,
-    ) -> io::Result<Option<Arc<Vec<Bucket>>>> {
-        let Ok(modified) = fs::metadata(self.rollup_file(target, day)).and_then(|m| m.modified())
-        else {
-            return Ok(None);
-        };
-        let stamp = modified
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let key = (target.to_string(), day, width, stamp);
-        if let Some(hit) = self.day_cache.lock().unwrap().get(&key) {
-            return Ok(Some(hit.clone()));
-        }
-        self.day_reads.fetch_add(1, Ordering::Relaxed);
-        let bytes = fs::read(self.day_file(target, day))?;
-        let (records, _) = read_records(&bytes);
-        let mut buckets: Vec<Bucket> = Vec::new();
-        for step in &records {
-            let start = day * DAY_MS + (step.start_ms - day * DAY_MS).div_euclid(width) * width;
-            if buckets.last().is_none_or(|b| b.start_ms != start) {
-                buckets.push(Bucket {
-                    start_ms: start,
-                    ..Bucket::default()
-                });
-            }
-            buckets.last_mut().unwrap().absorb(&bucket_of_step(step));
-        }
-        let buckets = Arc::new(buckets);
-        let mut cache = self.day_cache.lock().unwrap();
-        if cache.len() >= DAY_CACHE_LIMIT {
-            cache.clear();
-        }
-        cache.insert(key, buckets.clone());
-        Ok(Some(buckets))
     }
 
     pub fn root(&self) -> &Path {
@@ -423,44 +389,34 @@ impl Store {
         let aligned = |unit: i64| width % unit == 0 && from_ms.rem_euclid(unit) == 0;
         let tier = if aligned(DAY_MS) {
             Some(Tier::Day)
-        } else if aligned(HOUR_MS) {
-            Some(Tier::Hour)
+        } else if aligned(BIN_MS) {
+            Some(Tier::Bin)
         } else {
             None
         };
-        let mut parts: Vec<Bucket> = Vec::new();
+        let mut out: BTreeMap<i64, Bucket> = BTreeMap::new();
+        let slot = |ms: i64| from_ms + (ms - from_ms).div_euclid(width) * width;
         for day in self.days(target)? {
             let (day_start, day_end) = (day * DAY_MS, (day + 1) * DAY_MS);
             if day_end <= from_ms || day_start >= to_ms {
                 continue;
             }
             let whole_day = day_start >= from_ms && day_end <= to_ms;
-            if tier.is_none()
-                && DAY_MS % width == 0
-                && from_ms.rem_euclid(width) == 0
-                && let Some(cached) = self.closed_day_buckets(target, day, width)?
-            {
-                parts.extend(
-                    cached
-                        .iter()
-                        .filter(|b| b.start_ms >= from_ms && b.start_ms < to_ms)
-                        .cloned(),
-                );
-                continue;
-            }
             let rollup = match tier {
                 Some(_) => self.read_rollup(target, day)?,
                 None => None,
             };
             let use_day = whole_day && matches!(tier, Some(Tier::Day));
-            let hour_inside = |hour: i64| hour >= from_ms && hour + HOUR_MS <= to_ms;
+            let bin_inside = |bin: i64| bin >= from_ms && bin + BIN_MS <= to_ms;
             let covered = |ms: i64| {
-                rollup.is_some() && (use_day || hour_inside(ms.div_euclid(HOUR_MS) * HOUR_MS))
+                rollup.is_some() && (use_day || bin_inside(ms.div_euclid(BIN_MS) * BIN_MS))
             };
             match &rollup {
-                Some(r) if use_day => parts.push(r.day.clone()),
+                Some(r) if use_day => entry(&mut out, slot(r.day.start_ms)).absorb(&r.day),
                 Some(r) => {
-                    parts.extend(r.hours.iter().filter(|h| hour_inside(h.start_ms)).cloned())
+                    for bin in r.bins.iter().filter(|b| bin_inside(b.start_ms)) {
+                        entry(&mut out, slot(bin.start_ms)).absorb(bin);
+                    }
                 }
                 None => {}
             }
@@ -468,28 +424,15 @@ impl Store {
             if needs_raw {
                 let bytes = fs::read(self.day_file(target, day))?;
                 let (records, _) = read_records(&bytes);
-                parts.extend(
-                    records
-                        .iter()
-                        .filter(|s| {
-                            s.start_ms >= from_ms && s.start_ms < to_ms && !covered(s.start_ms)
-                        })
-                        .map(bucket_of_step),
-                );
+                for step in records
+                    .iter()
+                    .filter(|s| s.start_ms >= from_ms && s.start_ms < to_ms && !covered(s.start_ms))
+                {
+                    entry(&mut out, slot(step.start_ms)).absorb_step(step);
+                }
             }
         }
-        parts.sort_by_key(|p| p.start_ms);
-        let mut buckets: Vec<Bucket> = Vec::new();
-        for part in parts {
-            let start = from_ms + (part.start_ms - from_ms).div_euclid(width) * width;
-            if buckets.last().is_none_or(|b| b.start_ms != start) {
-                buckets.push(Bucket {
-                    start_ms: start,
-                    ..Bucket::default()
-                });
-            }
-            buckets.last_mut().unwrap().absorb(&part);
-        }
+        let buckets: Vec<Bucket> = out.into_values().collect();
         Ok(buckets)
     }
 
@@ -518,18 +461,18 @@ impl Store {
                 start_ms: day * DAY_MS,
                 ..Bucket::default()
             },
-            hours: Vec::new(),
+            bins: Vec::new(),
         };
         for step in &steps {
             let part = bucket_of_step(step);
-            let hour = step.start_ms.div_euclid(HOUR_MS) * HOUR_MS;
-            if rollup.hours.last().is_none_or(|h| h.start_ms != hour) {
-                rollup.hours.push(Bucket {
-                    start_ms: hour,
+            let bin = step.start_ms.div_euclid(BIN_MS) * BIN_MS;
+            if rollup.bins.last().is_none_or(|b| b.start_ms != bin) {
+                rollup.bins.push(Bucket {
+                    start_ms: bin,
                     ..Bucket::default()
                 });
             }
-            rollup.hours.last_mut().unwrap().absorb(&part);
+            rollup.bins.last_mut().unwrap().absorb(&part);
             rollup.day.absorb(&part);
         }
         let path = self.rollup_file(target, day);
@@ -538,6 +481,7 @@ impl Store {
         file.write_all(&rollup.encode())?;
         file.sync_data()?;
         fs::rename(&partial, &path)?;
+        let _ = fs::remove_file(path.with_extension(OLD_ROLLUP_EXTENSION));
         Ok(rollup)
     }
 
@@ -563,7 +507,9 @@ impl Store {
             for day in self.days(&target)? {
                 if day < cutoff {
                     fs::remove_file(self.day_file(&target, day))?;
-                    let _ = fs::remove_file(self.rollup_file(&target, day));
+                    let rollup = self.rollup_file(&target, day);
+                    let _ = fs::remove_file(&rollup);
+                    let _ = fs::remove_file(rollup.with_extension(OLD_ROLLUP_EXTENSION));
                     removed += 1;
                 }
             }

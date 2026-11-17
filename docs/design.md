@@ -122,8 +122,8 @@ inspecting are file operations.
 
 Queries read the days in range and merge steps into buckets of the requested width, each bucket
 a merged histogram with sent and received counts. When a day has closed, `haze run` writes a
-rollup beside it, `<YYYY-MM-DD>.hzr`: one histogram for the day and one per hour, with a CRC and
-written through a rename so it is all or nothing. A query whose width and start are whole hours
+rollup beside it, `<YYYY-MM-DD>.hzs`: one histogram for the day and one per half hour, with a CRC and
+written through a rename so it is all or nothing. A query whose width and start are whole half hours
 or days reads the rollups for the parts it covers whole and raw steps for the edges; any other
 width reads raw steps. A late write into a rolled day deletes its rollup and a corrupt one is
 ignored, so the raw files stay the truth. A 400 day view reads 400 small rollups instead of
