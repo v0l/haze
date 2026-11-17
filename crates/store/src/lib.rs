@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use haze_core::{Histogram, Step};
@@ -12,10 +14,15 @@ const ROLLUP_EXTENSION: &str = "hzr";
 const LOST: u32 = u32::MAX;
 const FIXED: usize = 8 + 4 + 2 + 2 + 2 + 2;
 const EXTENSION: &str = "haze";
+const DAY_CACHE_LIMIT: usize = 4096;
+
+type DayKey = (String, i64, i64, u128);
 
 pub struct Store {
     root: PathBuf,
     open: HashMap<(String, i64), File>,
+    day_cache: Mutex<HashMap<DayKey, Arc<Vec<Bucket>>>>,
+    day_reads: AtomicU64,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -254,7 +261,54 @@ impl Store {
         Ok(Store {
             root,
             open: HashMap::new(),
+            day_cache: Mutex::new(HashMap::new()),
+            day_reads: AtomicU64::new(0),
         })
+    }
+
+    pub fn day_reads(&self) -> u64 {
+        self.day_reads.load(Ordering::Relaxed)
+    }
+
+    fn closed_day_buckets(
+        &self,
+        target: &str,
+        day: i64,
+        width: i64,
+    ) -> io::Result<Option<Arc<Vec<Bucket>>>> {
+        let Ok(modified) = fs::metadata(self.rollup_file(target, day)).and_then(|m| m.modified())
+        else {
+            return Ok(None);
+        };
+        let stamp = modified
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let key = (target.to_string(), day, width, stamp);
+        if let Some(hit) = self.day_cache.lock().unwrap().get(&key) {
+            return Ok(Some(hit.clone()));
+        }
+        self.day_reads.fetch_add(1, Ordering::Relaxed);
+        let bytes = fs::read(self.day_file(target, day))?;
+        let (records, _) = read_records(&bytes);
+        let mut buckets: Vec<Bucket> = Vec::new();
+        for step in &records {
+            let start = day * DAY_MS + (step.start_ms - day * DAY_MS).div_euclid(width) * width;
+            if buckets.last().is_none_or(|b| b.start_ms != start) {
+                buckets.push(Bucket {
+                    start_ms: start,
+                    ..Bucket::default()
+                });
+            }
+            buckets.last_mut().unwrap().absorb(&bucket_of_step(step));
+        }
+        let buckets = Arc::new(buckets);
+        let mut cache = self.day_cache.lock().unwrap();
+        if cache.len() >= DAY_CACHE_LIMIT {
+            cache.clear();
+        }
+        cache.insert(key, buckets.clone());
+        Ok(Some(buckets))
     }
 
     pub fn root(&self) -> &Path {
@@ -381,6 +435,19 @@ impl Store {
                 continue;
             }
             let whole_day = day_start >= from_ms && day_end <= to_ms;
+            if tier.is_none()
+                && DAY_MS % width == 0
+                && from_ms.rem_euclid(width) == 0
+                && let Some(cached) = self.closed_day_buckets(target, day, width)?
+            {
+                parts.extend(
+                    cached
+                        .iter()
+                        .filter(|b| b.start_ms >= from_ms && b.start_ms < to_ms)
+                        .cloned(),
+                );
+                continue;
+            }
             let rollup = match tier {
                 Some(_) => self.read_rollup(target, day)?,
                 None => None,

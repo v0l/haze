@@ -183,3 +183,33 @@ fn a_corrupt_rollup_falls_back_to_raw_steps() {
     assert_eq!(store.query("t", START, START + DAY, DAY).unwrap(), raw);
     assert_eq!(store.targets().unwrap(), ["t"]);
 }
+
+#[test]
+fn repeated_unaligned_queries_over_closed_days_read_each_day_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(dir.path()).unwrap();
+    fill(&mut store, "t", 4, 60_000, 21);
+    store.rollup_closed_days(START + 4 * DAY).unwrap();
+    let width = 30 * 60_000;
+    let from = START + 90 * 60_000;
+    let first = store.query("t", from, START + 4 * DAY, width).unwrap();
+    let reads = store.day_reads();
+    assert!(reads > 0);
+    let second = store.query("t", from, START + 4 * DAY, width).unwrap();
+    assert_eq!(store.day_reads(), reads);
+    assert_eq!(first, second);
+
+    let fresh = Store::open(dir.path()).unwrap();
+    for day in 0..4 {
+        std::fs::remove_file(
+            dir.path()
+                .join("t")
+                .join(format!("{}.hzr", date_name(START / DAY + day))),
+        )
+        .unwrap();
+    }
+    assert_eq!(
+        fresh.query("t", from, START + 4 * DAY, width).unwrap(),
+        first
+    );
+}
